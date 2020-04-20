@@ -1,5 +1,10 @@
 #!/bin/bash
 
+if [ "${1}" == "" ]; then
+	echo "usage: sendcmd.sh <pulse ms>"
+	exit
+fi
+
 while(true); do  
 	read -n 1 CHAR
 	if [ "$CHAR" == "u" ]; then
