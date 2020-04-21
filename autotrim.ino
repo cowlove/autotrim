@@ -202,7 +202,7 @@ void loop() {
 				static int lastSeq = 0;
 				if (sscanf(line.line, "pin %d %d %d %d", &pin, &val, &ms, &seq) == 4) { 
 					cmdCount += 10;
-					if (pin >= 0 && pin < sizeof(pp)/sizeof(pp[0]) && seq != lastSeq) {
+					if (pin >= 0 && pin < sizeof(pp)/sizeof(pp[0]) && seq != lastSeq && ms > 5 && ms <= 500) {
 						pp[pin].pulse(val, ms);
 					}
 					lastSeq = seq;
