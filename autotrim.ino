@@ -196,12 +196,16 @@ void loop() {
 		for (int i = 0; i < r; i++) {
 			int ll = line.add(buf[i]);
 			if (ll) {
-				int ms, val, pin;
-				if (sscanf(line.line, "pin %d %d %d", &pin, &val, &ms) == 3) { 
-					cmdCount++;
-					if (pin >= 0 && pin < sizeof(pp)/sizeof(pp[0])) {
+				cmdCount++;
+				Serial.println(line.line);
+				int ms, val, pin, seq;
+				static int lastSeq = 0;
+				if (sscanf(line.line, "pin %d %d %d %d", &pin, &val, &ms, &seq) == 4) { 
+					cmdCount += 10;
+					if (pin >= 0 && pin < sizeof(pp)/sizeof(pp[0]) && seq != lastSeq) {
 						pp[pin].pulse(val, ms);
 					}
+					lastSeq = seq;
 				}
 			}
 		}
