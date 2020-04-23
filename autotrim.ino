@@ -18,9 +18,6 @@
 //#include "ArduinoOTA.h"
 #include "WiFiManager.h"
 #include "WiFiUdp.h"
-#include "mavlink.h"
-
-#include "mavlink.h"
 #include "Wire.h"
 
 #define LED_PIN 2
@@ -78,7 +75,8 @@ bool wifiTryConnect(const char *ap, const char *pw, int seconds = 15) {
 
 void setup() {
 	pinMode(LED_PIN, OUTPUT);
-	pinMode(3,INPUT);
+	pinMode(BUTTON_PIN, INPUT_PULLUP);
+//	pinMode(3,INPUT);
 #ifdef SCREEN
 	u8g2.begin();
 	u8g2.clearBuffer();					// clear the internal memory
@@ -152,14 +150,14 @@ public:
 	PinPulse(int p, int initval = 1) : pin(p) { pinMode(p, OUTPUT); digitalWrite(p, initval); } 
 	void  pulse(int v, int ms) { 
 		toggleTime = ms > 0 ? millis() + ms: 0;
-		//Serial.printf("PIN %d VALUE %d\n", pin, v);
+		Serial.printf("PIN %d VALUE %d\n", pin, v);
 		pinMode(pin, OUTPUT);
 		digitalWrite(pin, v);
 	}
 	void run() { 
 		if (toggleTime > 0 && millis() >= toggleTime) {
 			toggleTime = 0;
-			//Serial.printf("PIN %d TOGGLE\n", pin);
+			Serial.printf("PIN %d TOGGLE\n", pin);
 			pinMode(pin, OUTPUT);
 			digitalWrite(pin, !digitalRead(pin));
 		}
@@ -187,6 +185,16 @@ void loop() {
 		pp[n].run();
 	}
 
+	if (digitalRead(BUTTON_PIN) == 0) { 
+		digitalWrite(pp[0].pin, 0);
+		delay(1000);
+		digitalWrite(pp[0].pin, 1);
+		delay(100);
+		digitalWrite(pp[1].pin, 0);
+		delay(2000);
+		digitalWrite(pp[1].pin, 1);
+	}
+	
 	if (Serial.available()) {
 		static LineBuffer line;
 		int l = Serial.readBytes(buf, sizeof(buf));
@@ -212,7 +220,7 @@ void loop() {
 				int ms, val, pin, seq;
 				static int lastSeq = 0;
 				if (sscanf(line.line, "pin %d %d %d %d", &pin, &val, &ms, &seq) == 4) { 
-					cmdCount += 10;
+					cmdCount += 100;
 					if (pin >= 0 && pin < sizeof(pp)/sizeof(pp[0]) && seq != lastSeq && ms > 5 && ms <= 500) {
 						pp[pin].pulse(val, ms);
 					}
