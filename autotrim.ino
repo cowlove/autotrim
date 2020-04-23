@@ -122,11 +122,9 @@ void setup() {
 
 	udp.begin(udpPortIn);
 	
-	Serial.begin(57600, SERIAL_8N1);
+	Serial.begin(9600, SERIAL_8N1);
 	Serial.setTimeout(10);
 }
-
-
 
 class LineBuffer {
 public:
@@ -169,7 +167,8 @@ public:
 };
 
 static int cmdCount = 0;
-static PinPulse pp[] = { PinPulse(12), PinPulse(13) };
+static PinPulse pp[] = { PinPulse(27), PinPulse(14) };
+static uint8_t buf[1024];
 		
 void loop() {
 #ifdef SCREEN
@@ -187,10 +186,22 @@ void loop() {
 	for (int n =0; n < sizeof(pp)/sizeof(pp[0]); n++) { 
 		pp[n].run();
 	}
+
+	if (Serial.available()) {
+		static LineBuffer line;
+		int l = Serial.readBytes(buf, sizeof(buf));
+		for (int i = 0; i < l; i++) {
+			int ll = line.add(buf[i]);
+			if (ll) {
+				udp.beginPacket("255.255.255.255", 7891);
+				udp.write((uint8_t *)line.line, ll);
+				udp.endPacket();
+			}
+		}
+	}
 	
 	unsigned int avail;
 	if ((avail = udp.parsePacket()) > 0) {
-		static uint8_t buf[1024];
 		static LineBuffer line;
 		int r = udp.read(buf, min(avail, sizeof(buf)));
 		for (int i = 0; i < r; i++) {
