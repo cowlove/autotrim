@@ -20,6 +20,8 @@
 #include "WiFiUdp.h"
 #include "Wire.h"
 
+#include "RunningLeastSquares.h"
+#include "PidControl.h"
 #define LED_PIN 2
 #define BUTTON_PIN 0
 
@@ -46,6 +48,7 @@ const char *udpHost = "255.255.255.255";
 int udpPortIn = 7892;
 
 
+
 class EggTimer {
 	uint64_t last;
 	int interval; 
@@ -61,6 +64,10 @@ public:
 	}
 };
 
+PidControl pid(2);
+static RollingAverage<int,50> trimPosAvg;
+static EggTimer pidTimer(300);
+
 bool wifiTryConnect(const char *ap, const char *pw, int seconds = 15) { 
 	if (WiFi.status() != WL_CONNECTED) {
 		WiFi.begin(ap, pw);
@@ -72,6 +79,7 @@ bool wifiTryConnect(const char *ap, const char *pw, int seconds = 15) {
 	return WiFi.status() == WL_CONNECTED;
 }
 	
+
 
 void setup() {
 	pinMode(LED_PIN, OUTPUT);
@@ -87,7 +95,7 @@ void setup() {
 #endif
 	
 	WiFi.mode(WIFI_STA);
-#ifdef ESP32
+#if 0
 	//WiFi.setSleep(false);
 	
 	wifi.addAP("Ping-582B", "");
@@ -122,6 +130,11 @@ void setup() {
 	
 	Serial.begin(9600, SERIAL_8N1);
 	Serial.setTimeout(10);
+	
+	adcAttachPin(33);
+	analogSetCycles(255);
+	pid.setGains(.45, 0, 0.05);
+	pid.finalGain = 5;
 }
 
 class LineBuffer {
@@ -167,7 +180,10 @@ public:
 static int cmdCount = 0;
 static PinPulse pp[] = { PinPulse(27), PinPulse(14) };
 static uint8_t buf[1024];
-		
+
+
+float setPoint = 1000;
+
 void loop() {
 #ifdef SCREEN
 	if (pp[0].toggleTime == 0 && pp[1].toggleTime == 0 && screenTimer.tick()) { 
@@ -184,7 +200,22 @@ void loop() {
 	for (int n =0; n < sizeof(pp)/sizeof(pp[0]); n++) { 
 		pp[n].run();
 	}
+	trimPosAvg.add(analogRead(33));
+	Serial.printf("%05d\n", trimPosAvg.average());
 
+	if (pidTimer.tick()) { 
+		float c = pid.add((setPoint - trimPosAvg.average()), trimPosAvg.average(), millis() / 1000.0);
+		if (abs(c) > 200) {
+			c = 200 * c/abs(c);
+		}
+		if (abs(c) > 5) {
+			if (c < 0) {
+				pp[0].pulse(0, abs(c));
+			} else { 
+				pp[1].pulse(0, abs(c));
+			}
+		}
+	}
 	if (digitalRead(BUTTON_PIN) == 0) { 
 		digitalWrite(pp[0].pin, 0);
 		delay(1000);
@@ -218,12 +249,18 @@ void loop() {
 				cmdCount++;
 				Serial.println(line.line);
 				int ms, val, pin, seq;
+				float f;
 				static int lastSeq = 0;
 				if (sscanf(line.line, "pin %d %d %d %d", &pin, &val, &ms, &seq) == 4) { 
 					cmdCount += 100;
 					if (pin >= 0 && pin < sizeof(pp)/sizeof(pp[0]) && seq != lastSeq && ms > 5 && ms <= 500) {
 						pp[pin].pulse(val, ms);
 					}
+					lastSeq = seq;
+				}
+				if (sscanf(line.line, "trim %f %d", &f, &seq) == 2 ) {
+					if (seq != lastSeq)
+						setPoint = f;
 					lastSeq = seq;
 				}
 			}
