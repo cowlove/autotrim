@@ -65,8 +65,8 @@ public:
 };
 
 PidControl pid(2);
-static RollingAverage<int,50> trimPosAvg;
-static EggTimer pidTimer(300);
+static RollingAverage<int,1000> trimPosAvg;
+static EggTimer pidTimer(250);
 
 bool wifiTryConnect(const char *ap, const char *pw, int seconds = 15) { 
 	if (WiFi.status() != WL_CONNECTED) {
@@ -94,7 +94,8 @@ void setup() {
 	u8g2.sendBuffer();
 #endif
 	
-	WiFi.mode(WIFI_STA);
+	//WiFi.mode(WIFI_STA);
+	WiFi.setSleep(false);
 #if 0
 	//WiFi.setSleep(false);
 	
@@ -108,6 +109,9 @@ void setup() {
 	//WiFi.begin("ChloeNet", "niftyprairie7");
 	wifiTryConnect("Ping-582B", "");
 	wifiTryConnect("ChloeNet", "niftyprairie7");
+	u8g2.setCursor(0,20);				// set write position
+	u8g2.println("NO");
+	u8g2.sendBuffer();
 	wifiTryConnect("Ping-582B", "");
 	wifiTryConnect("ChloeNet", "niftyprairie7");
 	wifiTryConnect("Ping-582B", "");
@@ -115,8 +119,10 @@ void setup() {
 //	WiFi.begin("Ping-582B", "");
 #endif 
 
-	u8g2.setCursor(0,20);				// set write position
-	u8g2.println("CONNECTED");
+	u8g2.clearBuffer();					// clear the internal memory
+	u8g2.setFont(u8g2_font_courB08_tr);	// choose a suitable font
+	u8g2.setCursor(0,10);				// set write position
+	u8g2.println(WiFi.localIP());
 	u8g2.sendBuffer();
 	digitalWrite(LED_PIN, 1);
 	while (WiFi.status() != WL_CONNECTED) {
@@ -128,12 +134,12 @@ void setup() {
 
 	udp.begin(udpPortIn);
 	
-	Serial.begin(9600, SERIAL_8N1);
+	Serial.begin(115200, SERIAL_8N1);
 	Serial.setTimeout(10);
 	
 	adcAttachPin(33);
 	analogSetCycles(255);
-	pid.setGains(.45, 0, 0.05);
+	pid.setGains(.45, 0, 0);
 	pid.finalGain = 5;
 }
 
@@ -163,14 +169,14 @@ public:
 	PinPulse(int p, int initval = 1) : pin(p) { pinMode(p, OUTPUT); digitalWrite(p, initval); } 
 	void  pulse(int v, int ms) { 
 		toggleTime = ms > 0 ? millis() + ms: 0;
-		Serial.printf("PIN %d VALUE %d\n", pin, v);
+		//Serial.printf("PIN %d VALUE %d\n", pin, v);
 		pinMode(pin, OUTPUT);
 		digitalWrite(pin, v);
 	}
 	void run() { 
 		if (toggleTime > 0 && millis() >= toggleTime) {
 			toggleTime = 0;
-			Serial.printf("PIN %d TOGGLE\n", pin);
+			//Serial.printf("PIN %d TOGGLE\n", pin);
 			pinMode(pin, OUTPUT);
 			digitalWrite(pin, !digitalRead(pin));
 		}
@@ -182,17 +188,27 @@ static PinPulse pp[] = { PinPulse(27), PinPulse(14) };
 static uint8_t buf[1024];
 
 
-float setPoint = 1000;
+float setPoint = -1;
+int lastCmdTime = 0, lastCmdMs = 0, lastCmdPin = 0;
+float startTrimPos = 0;
 
+RollingAverage<long int,1000> loopTimeAvg;
+uint64_t lastLoopTime = -1;
+EggTimer serialReportTimer(1000);
+EggTimer pinReportTimer(3);
 void loop() {
+	uint64_t now = micros();
+	if (lastLoopTime != -1) 
+		loopTimeAvg.add(now - lastLoopTime);
+	lastLoopTime = now;
+	
+	
 #ifdef SCREEN
-	if (pp[0].toggleTime == 0 && pp[1].toggleTime == 0 && screenTimer.tick()) { 
-		u8g2.clearBuffer();					// clear the internal memory
-		u8g2.setFont(u8g2_font_courB08_tr);	// choose a suitable font
-		u8g2.setCursor(0,10);				// set write position
-		u8g2.println(WiFi.localIP());
+	if (0 && pp[0].toggleTime == 0 && pp[1].toggleTime == 0 && screenTimer.tick()) { 
 		u8g2.setCursor(0,20);
-		u8g2.printf("CMDS: %03d   CRS: %03d", cmdCount, 180);
+		u8g2.printf("CMDS: %03d TSET: %03d   ", cmdCount, (int)setPoint);
+		//u8g2.setCursor(0,30);
+		//u8g2.printf("LOOP: %05.2f/%05.2f/%05.2f     ", loopTimeAvg.average()/1000.0, loopTimeAvg.min()/1000.0, loopTimeAvg.max()/1000.0);
 		u8g2.sendBuffer();
 	}
 #endif
@@ -201,9 +217,14 @@ void loop() {
 		pp[n].run();
 	}
 	trimPosAvg.add(analogRead(33));
-	Serial.printf("%05d\n", trimPosAvg.average());
+	if (pinReportTimer.tick()) { 
+		Serial.printf("p%d %d %.2f %.2f m %d\n", lastCmdPin,  (int)(micros() - lastCmdTime), 
+			trimPosAvg.average(), startTrimPos, lastCmdMs);
+	}
+	if (serialReportTimer.tick())  
+		Serial.printf("L: %05.3f/%05.3f/%05.3f\n", loopTimeAvg.average()/1000.0, loopTimeAvg.min()/1000.0, loopTimeAvg.max()/1000.0);
 
-	if (pidTimer.tick()) { 
+	if (pidTimer.tick() && setPoint != -1) { 
 		float c = pid.add((setPoint - trimPosAvg.average()), trimPosAvg.average(), millis() / 1000.0);
 		if (abs(c) > 200) {
 			c = 200 * c/abs(c);
@@ -257,6 +278,10 @@ void loop() {
 						pp[pin].pulse(val, ms);
 					}
 					lastSeq = seq;
+					lastCmdTime = micros();
+					lastCmdMs = ms;
+					lastCmdPin = pin;
+					startTrimPos = trimPosAvg.average();
 				}
 				if (sscanf(line.line, "trim %f %d", &f, &seq) == 2 ) {
 					if (seq != lastSeq)
@@ -266,6 +291,4 @@ void loop() {
 			}
 		}
 	}
-
-	delay(1);
 }

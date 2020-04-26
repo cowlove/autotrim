@@ -11,7 +11,7 @@ IGNORE_STATE=1
 include ${HOME}/Arduino/makeEspArduino/makeEspArduino.mk
 
 fixtty:
-	stty -F ${UPLOAD_PORT} -hupcl -crtscts -echo raw 9600
+	stty -F ${UPLOAD_PORT} -hupcl -crtscts -echo raw 115200
 
 cat:	fixtty
 	cat ${UPLOAD_PORT}
