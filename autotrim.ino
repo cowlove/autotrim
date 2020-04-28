@@ -2,6 +2,10 @@
 #include "SPI.h"
 //#include "Update.h"
 
+//  
+// ./parse_sweep ./sweep6_unidirectional_battery_power.txt | grep PR | gnuplot -e 'p "-" u 2:3; pause 10;'
+
+
 #ifdef ESP32
 #include "Update.h"
 #include "WebServer.h"
