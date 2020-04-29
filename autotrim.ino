@@ -11,6 +11,8 @@
 #include "WebServer.h"
 #include "DNSServer.h"
 #include "ESPmDNS.h"
+#include <esp_task_wdt.h>
+
 #else
 #include <ESP8266WiFi.h>
 #include <WiFiClient.h>
@@ -86,6 +88,9 @@ bool wifiTryConnect(const char *ap, const char *pw, int seconds = 15) {
 
 
 void setup() {
+	esp_task_wdt_init(15, true);
+	esp_err_t err = esp_task_wdt_add(NULL);
+
 	pinMode(LED_PIN, OUTPUT);
 	pinMode(BUTTON_PIN, INPUT_PULLUP);
 //	pinMode(3,INPUT);
@@ -98,7 +103,8 @@ void setup() {
 	u8g2.sendBuffer();
 #endif
 	
-	//WiFi.mode(WIFI_STA);
+	WiFi.disconnect(true);
+	WiFi.mode(WIFI_STA);
 	WiFi.setSleep(false);
 #if 0
 	//WiFi.setSleep(false);
@@ -143,7 +149,7 @@ void setup() {
 	
 	adcAttachPin(33);
 	analogSetCycles(255);
-	pid.setGains(25, 0, 0);
+	pid.setGains(8, 0, 0);
 	pid.finalGain = 1;
 }
 
@@ -203,6 +209,9 @@ EggTimer pinReportTimer(3);
 uint64_t nextCmdTime = 0;
 
 void loop() {
+	esp_task_wdt_reset();
+
+
 	uint64_t now = micros();
 	if (lastLoopTime != -1) 
 		loopTimeAvg.add(now - lastLoopTime);
