@@ -143,8 +143,8 @@ void setup() {
 	
 	adcAttachPin(33);
 	analogSetCycles(255);
-	pid.setGains(.45, 0, 0);
-	pid.finalGain = 5;
+	pid.setGains(25, 0, 0);
+	pid.finalGain = 1;
 }
 
 class LineBuffer {
@@ -200,6 +200,8 @@ RollingAverage<long int,1000> loopTimeAvg;
 uint64_t lastLoopTime = -1;
 EggTimer serialReportTimer(1000);
 EggTimer pinReportTimer(3);
+uint64_t nextCmdTime = 0;
+
 void loop() {
 	uint64_t now = micros();
 	if (lastLoopTime != -1) 
@@ -228,18 +230,19 @@ void loop() {
 	if (serialReportTimer.tick())  
 		Serial.printf("L: %05.3f/%05.3f/%05.3f\n", loopTimeAvg.average()/1000.0, loopTimeAvg.min()/1000.0, loopTimeAvg.max()/1000.0);
 
-	if (pidTimer.tick() && setPoint != -1) { 
+	if (millis() > nextCmdTime && setPoint != -1) { 
 		float c = pid.add((setPoint - trimPosAvg.average()), trimPosAvg.average(), millis() / 1000.0);
 		if (abs(c) > 200) {
 			c = 200 * c/abs(c);
 		}
-		if (abs(c) > 5) {
+		if (abs(c) > 10) {
 			if (c < 0) {
 				pp[0].pulse(0, abs(c));
 			} else { 
 				pp[1].pulse(0, abs(c));
 			}
 		}
+		nextCmdTime = millis() + (int)abs(c) + 50;  // schedule time for PID to run. 
 	}
 	if (digitalRead(BUTTON_PIN) == 0) { 
 		digitalWrite(pp[0].pin, 0);
