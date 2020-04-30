@@ -1,5 +1,6 @@
 #include <HardwareSerial.h>
 #include "SPI.h"
+#include "CAN.h"
 //#include "Update.h"
 
 //  
@@ -35,10 +36,12 @@
 #include "WiFiMulti.h"
 WiFiMulti wifi;
 
-#define SCREEN
+//#define SCREEN
+#ifdef SCREEN
 #include <U8g2lib.h>
 #include <U8x8lib.h>
 U8G2_SSD1306_128X64_NONAME_F_SW_I2C u8g2(U8G2_R0, /* clock=*/ 15, /* data=*/ 4, /* reset=*/ 16);
+#endif
 
 #endif
 
@@ -53,6 +56,130 @@ const char *udpHost = "255.255.255.255";
 
 int udpPortIn = 7892;
 
+void superSend(const char *b) { 
+   for (int repeat = 0; repeat < 3; repeat++) { 
+		udp.beginPacket("255.255.255.255", 7891);
+		udp.write((uint8_t *)b, strlen(b));
+		udp.endPacket();
+		for (int n = 100; n < 103; n++) { 
+				char ip[32];
+				snprintf(ip, sizeof(ip), "192.168.4.%d", n);
+				udp.beginPacket(ip, 7891);
+				udp.write((const uint8_t *)b, strlen(b));
+				udp.endPacket();
+		}
+	}
+}
+
+struct {
+	int count;
+	float pitch, roll, knobVal;
+	int knobSel;
+	bool forceSend;
+	int lastId, lastSize, exceptions;
+} isrData;
+
+void sendCanData() { 
+	char sbuf[160];				
+
+	snprintf(sbuf, sizeof(sbuf), "%+06.3f %+06.3f %d %+06.3f CAN\n", 
+		isrData.pitch, isrData.roll, isrData.knobSel, isrData.knobVal);
+	superSend(sbuf);
+	Serial.printf(sbuf);
+}
+
+void canPrint(int packetSize) { 
+	Serial.printf(" (%f) can0 %08x [%02d] ", micros()/1000000.0, CAN.packetId(), packetSize);
+	if (!CAN.packetRtr()) {
+		for (int n = 0; n < packetSize && CAN.available(); n++) {
+			Serial.printf("%02x", (int)CAN.read());
+		}
+	}
+	Serial.printf("\n");
+}
+
+float floatFromBinary(const char *b) { 
+	char buf[4];
+	for (int n = 0; n < 4; n++) {
+		buf[n] = b[n];
+	}
+	return *(float *)&buf[0];
+}
+
+void canParse(int packetSize) {
+	static char buf[1024];
+	static int mpSize = 0;
+	static int lastId = 0;
+	// try to parse packet
+	if (packetSize) {
+		if (CAN.packetId() != lastId || mpSize >= sizeof(buf)) {
+			if (0) {
+				Serial.printf(" (%f) can0 %08x [%02d] ", micros()/1000000.0, lastId, mpSize);
+				for(int n = 0; n < mpSize; n++) {
+					if (n > 0 && (n % 8) == 0) { 
+						Serial.printf(" "); } 
+					Serial.printf("%02x", buf[n]);
+				}
+				Serial.printf("\n");
+			}
+			isrData.lastId = lastId;
+			isrData.lastSize = mpSize;
+			if (lastId == 0x18882100 && buf[0] == 0xdd && buf[1] == 0x00 && mpSize == 60) {
+				//Serial.printf("AHRS PACKET\n"); 
+				try { 
+					isrData.pitch = floatFromBinary(&buf[20]);
+					isrData.roll = floatFromBinary(&buf[24]);
+				} catch(...) {
+					isrData.pitch = isrData.roll = 0; 
+					isrData.exceptions++;
+				}
+				//sendCanData(false);
+			}
+			if (lastId == 0x10882200 && buf[0] == 0xe4 && buf[1] == 0x65 && mpSize == 7) {
+				if (0) {
+					Serial.printf(" (%f) can0 %08x [%02d] ", micros()/1000000.0, lastId, mpSize);
+					for(int n = 0; n < mpSize; n++) {
+						if (n > 0 && (n % 8) == 0) { 
+							Serial.printf(" "); } 
+						Serial.printf("%02x", buf[n]);
+					}
+					Serial.printf("\n");
+				}
+				try {
+					 
+					isrData.knobVal = floatFromBinary(&buf[3]);
+					isrData.knobSel = buf[2];
+				} catch(...) {
+					isrData.knobSel = isrData.knobVal = 0;
+					isrData.exceptions++; 
+				}
+				isrData.forceSend = true;
+				//sendCanData(true);
+			}
+			lastId = CAN.packetId();
+			mpSize = 0;
+		}
+		if (!CAN.packetRtr()) {
+			for (int n = 0; n < packetSize; n++) {
+				buf[mpSize + n] = CAN.read();
+				isrData.count++;
+			}
+			mpSize += packetSize;
+		}
+	}
+}
+
+
+void canInit() {
+	CAN.setPins(32/*rx*/,26/*tx*/);    // 25 and 26 on heltec 
+	if (!CAN.begin(1000E3)) {
+		Serial.println("Starting CAN failed!");
+		while (1) {}
+	}
+	Serial.println("CAN OPENED");
+	CAN.filter(0,0);
+	CAN.onReceive(canParse);
+}
 
 
 class EggTimer {
@@ -88,8 +215,12 @@ bool wifiTryConnect(const char *ap, const char *pw, int seconds = 15) {
 
 
 void setup() {
-	esp_task_wdt_init(15, true);
+	esp_task_wdt_init(20, true);
 	esp_err_t err = esp_task_wdt_add(NULL);
+
+	Serial.begin(921600, SERIAL_8N1);
+	Serial.setTimeout(10);
+	Serial.printf("AUTOTRIM\n");
 
 	pinMode(LED_PIN, OUTPUT);
 	pinMode(BUTTON_PIN, INPUT_PULLUP);
@@ -103,54 +234,37 @@ void setup() {
 	u8g2.sendBuffer();
 #endif
 	
-	WiFi.disconnect(true);
-	WiFi.mode(WIFI_STA);
-	WiFi.setSleep(false);
-#if 0
-	//WiFi.setSleep(false);
-	
 	wifi.addAP("Ping-582B", "");
-	wifi.addAP("ChloeNet", "niftyprairie7");
+	wifi.addAP("Flora_2GEXT", "maynards");
 	wifi.addAP("Team America", "51a52b5354");
+	uint64_t startms = millis();
+	Serial.printf("Waiting for wifi...\n");
 	while (WiFi.status() != WL_CONNECTED) {
 		wifi.run();
+		delay(10);
+		if (millis() - startms > 21000)
+						break;
 	}
-#else
-	//WiFi.begin("ChloeNet", "niftyprairie7");
-	wifiTryConnect("Ping-582B", "");
-	wifiTryConnect("ChloeNet", "niftyprairie7");
-	u8g2.setCursor(0,20);				// set write position
-	u8g2.println("NO");
-	u8g2.sendBuffer();
-	wifiTryConnect("Ping-582B", "");
-	wifiTryConnect("ChloeNet", "niftyprairie7");
-	wifiTryConnect("Ping-582B", "");
-	wifiTryConnect("ChloeNet", "niftyprairie7");
-//	WiFi.begin("Ping-582B", "");
-#endif 
 
+
+#ifdef SCREEN
 	u8g2.clearBuffer();					// clear the internal memory
 	u8g2.setFont(u8g2_font_courB08_tr);	// choose a suitable font
 	u8g2.setCursor(0,10);				// set write position
 	u8g2.println(WiFi.localIP());
 	u8g2.sendBuffer();
-	digitalWrite(LED_PIN, 1);
-	while (WiFi.status() != WL_CONNECTED) {
-#ifdef WIFI_MULTI
-		wifi.run();
 #endif
-		delay(1);
-	}
+	digitalWrite(LED_PIN, 1);
 
 	udp.begin(udpPortIn);
 	
-	Serial.begin(115200, SERIAL_8N1);
-	Serial.setTimeout(10);
 	
 	adcAttachPin(33);
 	analogSetCycles(255);
 	pid.setGains(8, 0, 0);
 	pid.finalGain = 1;
+
+	canInit();
 }
 
 class LineBuffer {
@@ -205,18 +319,18 @@ float startTrimPos = 0;
 RollingAverage<long int,1000> loopTimeAvg;
 uint64_t lastLoopTime = -1;
 EggTimer serialReportTimer(1000);
-EggTimer pinReportTimer(3);
+EggTimer pinReportTimer(300);
 uint64_t nextCmdTime = 0;
+
 
 void loop() {
 	esp_task_wdt_reset();
-
 
 	uint64_t now = micros();
 	if (lastLoopTime != -1) 
 		loopTimeAvg.add(now - lastLoopTime);
 	lastLoopTime = now;
-	
+	//delayMicroseconds(10);
 	
 #ifdef SCREEN
 	if (0 && pp[0].toggleTime == 0 && pp[1].toggleTime == 0 && screenTimer.tick()) { 
@@ -232,9 +346,11 @@ void loop() {
 		pp[n].run();
 	}
 	trimPosAvg.add(analogRead(33));
-	if (pinReportTimer.tick()) { 
+	if (pinReportTimer.tick() || isrData.forceSend) { 
+		isrData.forceSend = false;
 		Serial.printf("p%d %d %.2f %.2f m %d\n", lastCmdPin,  (int)(micros() - lastCmdTime), 
 			trimPosAvg.average(), startTrimPos, lastCmdMs);
+		sendCanData();
 	}
 	if (serialReportTimer.tick())  
 		Serial.printf("L: %05.3f/%05.3f/%05.3f\n", loopTimeAvg.average()/1000.0, loopTimeAvg.min()/1000.0, loopTimeAvg.max()/1000.0);
@@ -284,7 +400,7 @@ void loop() {
 			int ll = line.add(buf[i]);
 			if (ll) {
 				cmdCount++;
-				Serial.println(line.line);
+				//Serial.println(line.line);
 				int ms, val, pin, seq;
 				float f;
 				static int lastSeq = 0;
