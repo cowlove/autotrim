@@ -73,7 +73,7 @@ void superSend(const char *b) {
 
 struct {
 	int count;
-	float pitch, roll, knobVal;
+	float pitch, roll, knobVal, magHdg;
 	int knobSel;
 	bool forceSend;
 	int lastId, lastSize, exceptions;
@@ -82,8 +82,8 @@ struct {
 void sendCanData() { 
 	char sbuf[160];				
 
-	snprintf(sbuf, sizeof(sbuf), "%+06.3f %+06.3f %d %+06.3f CAN\n", 
-		isrData.pitch, isrData.roll, isrData.knobSel, isrData.knobVal);
+	snprintf(sbuf, sizeof(sbuf), "%+06.3f %+06.3f %+06.3f %d %+06.3f CAN\n", 
+		isrData.pitch, isrData.roll, isrData.magHdg, isrData.knobSel, isrData.knobVal);
 	superSend(sbuf);
 	Serial.printf(sbuf);
 }
@@ -126,7 +126,8 @@ void canParse(int packetSize) {
 			isrData.lastSize = mpSize;
 			if (lastId == 0x18882100 && buf[0] == 0xdd && buf[1] == 0x00 && mpSize == 60) {
 				//Serial.printf("AHRS PACKET\n"); 
-				try { 
+				try {
+					isrData.magHdg = floatFromBinary(&buf[16]); 
 					isrData.pitch = floatFromBinary(&buf[20]);
 					isrData.roll = floatFromBinary(&buf[24]);
 				} catch(...) {
@@ -171,7 +172,7 @@ void canParse(int packetSize) {
 
 
 void canInit() {
-	CAN.setPins(32/*rx*/,26/*tx*/);    // 25 and 26 on heltec 
+	CAN.setPins(35/*rx*/,32/*tx*/);    // 25 and 26 on heltec 
 	if (!CAN.begin(1000E3)) {
 		Serial.println("Starting CAN failed!");
 		while (1) {}
@@ -319,7 +320,7 @@ float startTrimPos = 0;
 RollingAverage<long int,1000> loopTimeAvg;
 uint64_t lastLoopTime = -1;
 EggTimer serialReportTimer(1000);
-EggTimer pinReportTimer(300);
+EggTimer pinReportTimer(300), canResetTimer(5000);
 uint64_t nextCmdTime = 0;
 
 
@@ -332,6 +333,9 @@ void loop() {
 	lastLoopTime = now;
 	//delayMicroseconds(10);
 	
+	if (canResetTimer.tick()) {
+		CAN.filter(0,0);
+	}
 #ifdef SCREEN
 	if (0 && pp[0].toggleTime == 0 && pp[1].toggleTime == 0 && screenTimer.tick()) { 
 		u8g2.setCursor(0,20);
