@@ -1,6 +1,6 @@
 #include <HardwareSerial.h>
 #include "SPI.h"
-#include "CAN.h"
+#include <CAN.h>
 //#include "Update.h"
 
 //  
@@ -22,8 +22,7 @@
 #endif
 
 #include "FS.h"
-//#include "ArduinoOTA.h"
-#include "WiFiManager.h"
+#include "ArduinoOTA.h"
 #include "WiFiUdp.h"
 #include "Wire.h"
 
@@ -36,7 +35,7 @@
 #include "WiFiMulti.h"
 WiFiMulti wifi;
 
-//#define SCREEN
+#define SCREEN
 #ifdef SCREEN
 #include <U8g2lib.h>
 #include <U8x8lib.h>
@@ -57,7 +56,7 @@ const char *udpHost = "255.255.255.255";
 int udpPortIn = 7892;
 
 void superSend(const char *b) { 
-   for (int repeat = 0; repeat < 3; repeat++) { 
+   for (int repeat = 0; repeat < 1; repeat++) { 
 		udp.beginPacket("255.255.255.255", 7891);
 		udp.write((uint8_t *)b, strlen(b));
 		udp.endPacket();
@@ -79,13 +78,21 @@ struct {
 	int lastId, lastSize, exceptions;
 } isrData;
 
+
+void sendDebugData() { 
+	char sbuf[160];				
+	snprintf(sbuf, sizeof(sbuf), "%d %s DEBUG\n", 
+		(int)isrData.count, WiFi.localIP().toString().c_str());
+	superSend(sbuf);
+	Serial.printf(sbuf);
+}
+
 void sendCanData() { 
 	char sbuf[160];				
 
 	snprintf(sbuf, sizeof(sbuf), "%+06.3f %+06.3f %+06.3f %d %+06.3f CAN\n", 
 		isrData.pitch, isrData.roll, isrData.magHdg, isrData.knobSel, isrData.knobVal);
 	superSend(sbuf);
-	Serial.printf(sbuf);
 }
 
 void canPrint(int packetSize) { 
@@ -262,9 +269,9 @@ void setup() {
 	
 	adcAttachPin(33);
 	analogSetCycles(255);
-	pid.setGains(8, 0, 0);
+	pid.setGains(4, 0, 0);
 	pid.finalGain = 1;
-
+	ArduinoOTA.begin();
 	canInit();
 }
 
@@ -326,7 +333,7 @@ uint64_t nextCmdTime = 0;
 
 void loop() {
 	esp_task_wdt_reset();
-
+	ArduinoOTA.handle();
 	uint64_t now = micros();
 	if (lastLoopTime != -1) 
 		loopTimeAvg.add(now - lastLoopTime);
@@ -356,8 +363,10 @@ void loop() {
 			trimPosAvg.average(), startTrimPos, lastCmdMs);
 		sendCanData();
 	}
-	if (serialReportTimer.tick())  
+	if (serialReportTimer.tick()) {
+		sendDebugData(); 
 		Serial.printf("L: %05.3f/%05.3f/%05.3f\n", loopTimeAvg.average()/1000.0, loopTimeAvg.min()/1000.0, loopTimeAvg.max()/1000.0);
+	}
 
 	if (millis() > nextCmdTime && setPoint != -1) { 
 		float c = pid.add((setPoint - trimPosAvg.average()), trimPosAvg.average(), millis() / 1000.0);
@@ -420,8 +429,11 @@ void loop() {
 					startTrimPos = trimPosAvg.average();
 				}
 				if (sscanf(line.line, "trim %f %d", &f, &seq) == 2 ) {
-					if (seq != lastSeq)
-						setPoint = f;
+					setPoint = f;
+					lastSeq = seq;
+				}
+				if (sscanf(line.line, "gain %f %d", &f, &seq) == 2 ) {
+					pid.gain.p = f;
 					lastSeq = seq;
 				}
 			}
