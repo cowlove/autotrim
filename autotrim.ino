@@ -56,7 +56,7 @@ const char *udpHost = "255.255.255.255";
 int udpPortIn = 7892;
 
 void superSend(const char *b) { 
-   for (int repeat = 0; repeat < 1; repeat++) { 
+   for (int repeat = 0; repeat < 2; repeat++) { 
 		udp.beginPacket("255.255.255.255", 7891);
 		udp.write((uint8_t *)b, strlen(b));
 		udp.endPacket();
@@ -78,18 +78,19 @@ struct {
 	int lastId, lastSize, exceptions;
 } isrData;
 
+PidControl pid(2);
+static RollingAverage<int,1000> trimPosAvg;
 
 void sendDebugData() { 
 	char sbuf[160];				
-	snprintf(sbuf, sizeof(sbuf), "%d %s DEBUG\n", 
-		(int)isrData.count, WiFi.localIP().toString().c_str());
+	snprintf(sbuf, sizeof(sbuf), "%d %f %s DEBUG\n", 
+		(int)isrData.count, (float)trimPosAvg.average(), WiFi.localIP().toString().c_str());
 	superSend(sbuf);
 	Serial.printf(sbuf);
 }
 
 void sendCanData() { 
 	char sbuf[160];				
-
 	snprintf(sbuf, sizeof(sbuf), "%+06.3f %+06.3f %+06.3f %d %+06.3f CAN\n", 
 		isrData.pitch, isrData.roll, isrData.magHdg, isrData.knobSel, isrData.knobVal);
 	superSend(sbuf);
@@ -132,6 +133,7 @@ void canParse(int packetSize) {
 			isrData.lastId = lastId;
 			isrData.lastSize = mpSize;
 			if (lastId == 0x18882100 && buf[0] == 0xdd && buf[1] == 0x00 && mpSize == 60) {
+				// TODO: consider 0x188c? 
 				//Serial.printf("AHRS PACKET\n"); 
 				try {
 					isrData.magHdg = floatFromBinary(&buf[16]); 
@@ -143,7 +145,8 @@ void canParse(int packetSize) {
 				}
 				//sendCanData(false);
 			}
-			if (lastId == 0x10882200 && buf[0] == 0xe4 && buf[1] == 0x65 && mpSize == 7) {
+			if ((lastId == 0x10882200 || lastId == 0x108c2200) 
+				&& buf[0] == 0xe4 && buf[1] == 0x65 && mpSize == 7) {
 				if (0) {
 					Serial.printf(" (%f) can0 %08x [%02d] ", micros()/1000000.0, lastId, mpSize);
 					for(int n = 0; n < mpSize; n++) {
@@ -205,9 +208,6 @@ public:
 	}
 };
 
-PidControl pid(2);
-static RollingAverage<int,1000> trimPosAvg;
-static EggTimer pidTimer(250);
 
 bool wifiTryConnect(const char *ap, const char *pw, int seconds = 15) { 
 	if (WiFi.status() != WL_CONNECTED) {
@@ -293,6 +293,7 @@ public:
 };
 
 EggTimer blinkTimer(500), screenTimer(200);
+EggTimer pidTimer(250);
 
 class PinPulse { 
 public:
@@ -327,7 +328,7 @@ float startTrimPos = 0;
 RollingAverage<long int,1000> loopTimeAvg;
 uint64_t lastLoopTime = -1;
 EggTimer serialReportTimer(1000);
-EggTimer pinReportTimer(300), canResetTimer(5000);
+EggTimer pinReportTimer(200), canResetTimer(5000);
 uint64_t nextCmdTime = 0;
 
 
