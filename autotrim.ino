@@ -44,6 +44,19 @@ U8G2_SSD1306_128X64_NONAME_F_SW_I2C u8g2(U8G2_R0, /* clock=*/ 15, /* data=*/ 4, 
 
 #endif
 
+
+/*
+ * 13	Serial2
+ * 12	Serial2
+ * 14	Relay 1
+ * 27	Relay 2
+ * 26
+ * 25	
+ * 33	ADC IN
+ * 32	CAN
+ * 35	CAN
+ */
+
 WiFiUDP udp;
 //const char *udpHost = "192.168.4.100";
 const char *udpHost = "255.255.255.255";
@@ -54,6 +67,42 @@ const char *udpHost = "255.255.255.255";
 //               7893 - ifly out
 
 int udpPortIn = 7892;
+
+
+// From data format described in web search "SL30 Installation Manual PDF" 
+class SL30 {
+public:
+        std::string twoenc(unsigned char x) {
+                char r[3];
+                r[0] = (((x & 0xf0) >> 4) + 0x30);
+                r[1] = (x & 0xf) + 0x30;
+                r[2] = 0;
+                return std::string(r);
+        }
+        int chksum(const std::string& r) {
+                int sum = 0;
+                const char* s = r.c_str();
+                while (*s)
+                        sum += *s++;
+                return sum & 0xff;
+        }
+        void open() {
+        }
+        void pmrrv(const std::string& r) {
+                std::string s = std::string("$PMRRV") + r + twoenc(chksum(r)) + "\r\n";
+                Serial2.write(s.c_str());
+                //Serial.write(s.c_str());
+        }
+        void setCDI(double hd, double vd) {
+                int flags = 0b11111010;
+                hd *= 127 / 3;
+                vd *= 127 / 3;
+                pmrrv(std::string("21") + twoenc(hd) + twoenc(vd) + twoenc(flags));
+        }
+};
+
+SL30 sl30;
+
 
 void superSend(const char *b) { 
    for (int repeat = 0; repeat < 2; repeat++) { 
@@ -72,10 +121,11 @@ void superSend(const char *b) {
 
 struct {
 	int count;
-	float pitch, roll, knobVal, magHdg;
+	float pitch, roll, knobVal, magHdg, ias, tas, palt;
 	int knobSel;
 	bool forceSend;
 	int lastId, lastSize, exceptions;
+	uint64_t timestamp;
 } isrData;
 
 PidControl pid(2);
@@ -91,8 +141,9 @@ void sendDebugData() {
 
 void sendCanData() { 
 	char sbuf[160];				
-	snprintf(sbuf, sizeof(sbuf), "%+06.3f %+06.3f %+06.3f %d %+06.3f CAN\n", 
-		isrData.pitch, isrData.roll, isrData.magHdg, isrData.knobSel, isrData.knobVal);
+	int age = millis() - isrData.timestamp;
+	snprintf(sbuf, sizeof(sbuf), "%+06.3f %+06.3f %+06.3f %+06.3f %+06.3f %+06.3f %d %+06.3f %d CAN\n", 
+		isrData.pitch, isrData.roll, isrData.magHdg, isrData.ias, isrData.tas, isrData.palt, isrData.knobSel, isrData.knobVal, age);
 	superSend(sbuf);
 }
 
@@ -139,8 +190,25 @@ void canParse(int packetSize) {
 					isrData.magHdg = floatFromBinary(&buf[16]); 
 					isrData.pitch = floatFromBinary(&buf[20]);
 					isrData.roll = floatFromBinary(&buf[24]);
+					isrData.forceSend = true;
+					isrData.timestamp = millis();
 				} catch(...) {
-					isrData.pitch = isrData.roll = 0; 
+					isrData.magHdg = isrData.roll = 0; 
+					isrData.exceptions++;
+				}
+				//sendCanData(false);
+			}
+			if (lastId == 0x18882100 && buf[0] == 0xdd && buf[1] == 0x0a && mpSize >= 44) {
+				// TODO: consider 0x188c? 
+				//Serial.printf("PS PACKET\n"); 
+				try {
+					isrData.ias = floatFromBinary(&buf[12]); 
+					isrData.tas = floatFromBinary(&buf[16]);
+					isrData.palt = floatFromBinary(&buf[24]);
+					isrData.timestamp = millis();
+					isrData.forceSend = true;
+				} catch(...) {
+					isrData.ias = isrData.tas = isrData.palt = 0; 
 					isrData.exceptions++;
 				}
 				//sendCanData(false);
@@ -221,6 +289,7 @@ bool wifiTryConnect(const char *ap, const char *pw, int seconds = 15) {
 }
 	
 
+bool otaInProgress = false;
 
 void setup() {
 	esp_task_wdt_init(20, true);
@@ -230,6 +299,9 @@ void setup() {
 	Serial.setTimeout(10);
 	Serial.printf("AUTOTRIM\n");
 
+	Serial2.begin(9600, SERIAL_8N1, 13/*rx*/, 12/*tx*/);
+	Serial2.setTimeout(10);
+	
 	pinMode(LED_PIN, OUTPUT);
 	pinMode(BUTTON_PIN, INPUT_PULLUP);
 //	pinMode(3,INPUT);
@@ -245,6 +317,7 @@ void setup() {
 	wifi.addAP("Ping-582B", "");
 	wifi.addAP("Flora_2GEXT", "maynards");
 	wifi.addAP("Team America", "51a52b5354");
+	wifi.addAP("ChloeNet", "niftyprairie7");
 	uint64_t startms = millis();
 	Serial.printf("Waiting for wifi...\n");
 	while (WiFi.status() != WL_CONNECTED) {
@@ -266,12 +339,15 @@ void setup() {
 
 	udp.begin(udpPortIn);
 	
-	
 	adcAttachPin(33);
 	analogSetCycles(255);
 	pid.setGains(4, 0, 0);
 	pid.finalGain = 1;
 	ArduinoOTA.begin();
+	ArduinoOTA.onStart([]() {
+		Serial.println("Start");
+		otaInProgress = true;
+	});
 	canInit();
 }
 
@@ -330,11 +406,17 @@ uint64_t lastLoopTime = -1;
 EggTimer serialReportTimer(1000);
 EggTimer pinReportTimer(200), canResetTimer(5000);
 uint64_t nextCmdTime = 0;
+static bool debugMoveNeedles = true;
 
 
 void loop() {
 	esp_task_wdt_reset();
 	ArduinoOTA.handle();
+	if (otaInProgress) {
+		CAN.onReceive(NULL);
+		return;
+	}
+	
 	uint64_t now = micros();
 	if (lastLoopTime != -1) 
 		loopTimeAvg.add(now - lastLoopTime);
@@ -437,7 +519,21 @@ void loop() {
 					pid.gain.p = f;
 					lastSeq = seq;
 				}
+				if (sscanf(line.line, "cdi %f", &f) == 1 ) {
+					debugMoveNeedles = f;
+					lastSeq = seq;
+				}
 			}
 		}
+	}
+
+	static double hd = 0, vd = 0;
+	EggTimer g5Timer(100);
+	if (g5Timer.tick() && debugMoveNeedles) { 
+		hd += .1;
+		vd += .15;
+		if (hd > 2) hd = -2;
+		if (vd > 2) vd = -2;
+		sl30.setCDI(hd, vd);
 	}
 }
