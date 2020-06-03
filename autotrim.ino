@@ -91,6 +91,7 @@ public:
         void pmrrv(const std::string& r) {
                 std::string s = std::string("$PMRRV") + r + twoenc(chksum(r)) + "\r\n";
                 Serial2.write(s.c_str());
+				Serial.printf("G5: %s", s.c_str());
                 //Serial.write(s.c_str());
         }
         void setCDI(double hd, double vd) {
@@ -121,7 +122,7 @@ void superSend(const char *b) {
 
 struct {
 	int count;
-	float pitch, roll, knobVal, magHdg, ias, tas, palt;
+	float pitch, roll, knobVal, magHdg, magTrack, ias, tas, palt;
 	int knobSel;
 	bool forceSend;
 	int lastId, lastSize, exceptions;
@@ -142,8 +143,9 @@ void sendDebugData() {
 void sendCanData() { 
 	char sbuf[160];				
 	int age = millis() - isrData.timestamp;
-	snprintf(sbuf, sizeof(sbuf), "%+06.3f %+06.3f %+06.3f %+06.3f %+06.3f %+06.3f %d %+06.3f %d CAN\n", 
-		isrData.pitch, isrData.roll, isrData.magHdg, isrData.ias, isrData.tas, isrData.palt, isrData.knobSel, isrData.knobVal, age);
+	snprintf(sbuf, sizeof(sbuf), "%+06.3f %+06.3f %+06.3f %+06.3f %+06.3f %+06.3f %+06.3f %d %+06.3f %d CAN\n", 
+		isrData.pitch, isrData.roll, isrData.magHdg, isrData.magTrack, isrData.ias, isrData.tas, 
+		isrData.palt, isrData.knobSel, isrData.knobVal, age);
 	superSend(sbuf);
 }
 
@@ -173,7 +175,7 @@ void canParse(int packetSize) {
 	if (packetSize) {
 		if (CAN.packetId() != lastId || mpSize >= sizeof(buf)) {
 			if (0) {
-				Serial.printf(" (%f) can0 %08x [%02d] ", micros()/1000000.0, lastId, mpSize);
+				Serial.printf(" can0 %08x [%02d] ", lastId, mpSize);
 				for(int n = 0; n < mpSize; n++) {
 					if (n > 0 && (n % 8) == 0) { 
 						Serial.printf(" "); } 
@@ -187,7 +189,12 @@ void canParse(int packetSize) {
 				// TODO: consider 0x188c? 
 				//Serial.printf("AHRS PACKET\n"); 
 				try {
-					isrData.magHdg = floatFromBinary(&buf[16]); 
+					if (buf[15] & 0x2) {
+						isrData.magHdg = floatFromBinary(&buf[16]);
+					}
+					if (buf[15] & 0x4) {
+						isrData.magTrack = floatFromBinary(&buf[16]);
+					} 
 					isrData.pitch = floatFromBinary(&buf[20]);
 					isrData.roll = floatFromBinary(&buf[24]);
 					isrData.forceSend = true;
@@ -406,7 +413,7 @@ uint64_t lastLoopTime = -1;
 EggTimer serialReportTimer(1000);
 EggTimer pinReportTimer(200), canResetTimer(5000);
 uint64_t nextCmdTime = 0;
-static bool debugMoveNeedles = true;
+static bool debugMoveNeedles = false;
 
 
 void loop() {
@@ -442,8 +449,8 @@ void loop() {
 	trimPosAvg.add(analogRead(33));
 	if (pinReportTimer.tick() || isrData.forceSend) { 
 		isrData.forceSend = false;
-		Serial.printf("p%d %d %.2f %.2f m %d\n", lastCmdPin,  (int)(micros() - lastCmdTime), 
-			trimPosAvg.average(), startTrimPos, lastCmdMs);
+		//Serial.printf("p%d %d %.2f %.2f m %d\n", lastCmdPin,  (int)(micros() - lastCmdTime), 
+		//	trimPosAvg.average(), startTrimPos, lastCmdMs);
 		sendCanData();
 	}
 	if (serialReportTimer.tick()) {
@@ -496,7 +503,7 @@ void loop() {
 			int ll = line.add(buf[i]);
 			if (ll) {
 				cmdCount++;
-				//Serial.println(line.line);
+				Serial.printf("LINE: %s", line.line);
 				int ms, val, pin, seq;
 				float f;
 				static int lastSeq = 0;
@@ -523,12 +530,16 @@ void loop() {
 					debugMoveNeedles = f;
 					lastSeq = seq;
 				}
+				if (strstr(line.line, "PMRRV")  != NULL) { 
+					Serial2.write((uint8_t *)line.line, strlen(line.line));
+					Serial.printf("G5: %s", line.line);
+				}
 			}
 		}
 	}
 
 	static double hd = 0, vd = 0;
-	EggTimer g5Timer(100);
+	static EggTimer g5Timer(100);
 	if (g5Timer.tick() && debugMoveNeedles) { 
 		hd += .1;
 		vd += .15;
