@@ -67,7 +67,7 @@ const char *udpHost = "255.255.255.255";
 //               7893 - ifly out
 
 int udpPortIn = 7892;
-
+int udpCanOut = 0;
 
 // From data format described in web search "SL30 Installation Manual PDF" 
 class SL30 {
@@ -91,7 +91,7 @@ public:
         void pmrrv(const std::string& r) {
                 std::string s = std::string("$PMRRV") + r + twoenc(chksum(r)) + "\r\n";
                 Serial2.write(s.c_str());
-				Serial.printf("G5: %s", s.c_str());
+				//Serial.printf("G5: %s", s.c_str());
                 //Serial.write(s.c_str());
         }
         void setCDI(double hd, double vd) {
@@ -168,35 +168,57 @@ float floatFromBinary(const char *b) {
 }
 
 void canParse(int packetSize) {
-	static char buf[1024];
+	static char ibuf[1024];
 	static int mpSize = 0;
 	static int lastId = 0;
 	// try to parse packet
 	if (packetSize) {
-		if (CAN.packetId() != lastId || mpSize >= sizeof(buf)) {
+		if (CAN.packetId() != lastId || mpSize >= sizeof(ibuf)) {
 			if (0) {
-				Serial.printf(" can0 %08x [%02d] ", lastId, mpSize);
+				static char obuf[1024];
+				snprintf(obuf, sizeof(obuf), " (%.3f) can0 %08x [%02d] ", millis() / 1000.0, lastId, mpSize);
+				int outlen = strlen(obuf);
 				for(int n = 0; n < mpSize; n++) {
 					if (n > 0 && (n % 8) == 0) { 
-						Serial.printf(" "); } 
-					Serial.printf("%02x", buf[n]);
+						snprintf(obuf + outlen, sizeof(obuf) - outlen, " ");
+						outlen += 1;
+					} 
+					snprintf(obuf + outlen, sizeof(obuf) - outlen, "%02x", ibuf[n]);
+					outlen += 2;
 				}
-				Serial.printf("\n");
+				obuf[outlen++] = '\n';
+				obuf[outlen] = 0;				
+				Serial.print(obuf);
+				
+				if (udpCanOut > 0) { 
+					udp.beginPacket("255.255.255.255", udpCanOut);
+					udp.write((uint8_t *)obuf, outlen);
+					udp.endPacket();
+				}		
 			}
 			isrData.lastId = lastId;
 			isrData.lastSize = mpSize;
-			if (lastId == 0x18882100 && buf[0] == 0xdd && buf[1] == 0x00 && mpSize == 60) {
+			if ((lastId == 0x18882100 || lastId == 0x188c2100) && ibuf[0] == 0xdd && ibuf[1] == 0x00 && mpSize == 60 && ibuf[15] & 0x40) {
+				try {
+					isrData.magHdg = floatFromBinary(&ibuf[16]);
+				} catch(...) {
+					isrData.magHdg = 0;
+				}
+			} 
+			if ((lastId == 0x18882100 || lastId == 0x188c2100) && ibuf[0] == 0xdd && ibuf[1] == 0x00 && mpSize == 60 && ibuf[15] & 0x20) {
+				try {
+					isrData.magTrack = floatFromBinary(&ibuf[16]);
+				} catch(...) {
+					isrData.magTrack = 0;
+				}
+			} 
+	
+			if (lastId == 0x18882100 && ibuf[0] == 0xdd && ibuf[1] == 0x00 && mpSize == 60) {
 				// TODO: consider 0x188c? 
 				//Serial.printf("AHRS PACKET\n"); 
 				try {
-					if (buf[15] & 0x2) {
-						isrData.magHdg = floatFromBinary(&buf[16]);
-					}
-					if (buf[15] & 0x4) {
-						isrData.magTrack = floatFromBinary(&buf[16]);
-					} 
-					isrData.pitch = floatFromBinary(&buf[20]);
-					isrData.roll = floatFromBinary(&buf[24]);
+					isrData.pitch = floatFromBinary(&ibuf[20]);
+					isrData.roll = floatFromBinary(&ibuf[24]);
 					isrData.forceSend = true;
 					isrData.timestamp = millis();
 				} catch(...) {
@@ -205,13 +227,13 @@ void canParse(int packetSize) {
 				}
 				//sendCanData(false);
 			}
-			if (lastId == 0x18882100 && buf[0] == 0xdd && buf[1] == 0x0a && mpSize >= 44) {
+			if (lastId == 0x18882100 && ibuf[0] == 0xdd && ibuf[1] == 0x0a && mpSize >= 44) {
 				// TODO: consider 0x188c? 
 				//Serial.printf("PS PACKET\n"); 
 				try {
-					isrData.ias = floatFromBinary(&buf[12]); 
-					isrData.tas = floatFromBinary(&buf[16]);
-					isrData.palt = floatFromBinary(&buf[24]);
+					isrData.ias = floatFromBinary(&ibuf[12]); 
+					isrData.tas = floatFromBinary(&ibuf[16]);
+					isrData.palt = floatFromBinary(&ibuf[24]);
 					isrData.timestamp = millis();
 					isrData.forceSend = true;
 				} catch(...) {
@@ -221,20 +243,20 @@ void canParse(int packetSize) {
 				//sendCanData(false);
 			}
 			if ((lastId == 0x10882200 || lastId == 0x108c2200) 
-				&& buf[0] == 0xe4 && buf[1] == 0x65 && mpSize == 7) {
+				&& ibuf[0] == 0xe4 && ibuf[1] == 0x65 && mpSize == 7) {
 				if (0) {
 					Serial.printf(" (%f) can0 %08x [%02d] ", micros()/1000000.0, lastId, mpSize);
 					for(int n = 0; n < mpSize; n++) {
 						if (n > 0 && (n % 8) == 0) { 
 							Serial.printf(" "); } 
-						Serial.printf("%02x", buf[n]);
+						Serial.printf("%02x", ibuf[n]);
 					}
 					Serial.printf("\n");
 				}
 				try {
 					 
-					isrData.knobVal = floatFromBinary(&buf[3]);
-					isrData.knobSel = buf[2];
+					isrData.knobVal = floatFromBinary(&ibuf[3]);
+					isrData.knobSel = ibuf[2];
 				} catch(...) {
 					isrData.knobSel = isrData.knobVal = 0;
 					isrData.exceptions++; 
@@ -247,7 +269,7 @@ void canParse(int packetSize) {
 		}
 		if (!CAN.packetRtr()) {
 			for (int n = 0; n < packetSize; n++) {
-				buf[mpSize + n] = CAN.read();
+				ibuf[mpSize + n] = CAN.read();
 				isrData.count++;
 			}
 			mpSize += packetSize;
@@ -453,7 +475,7 @@ void loop() {
 		//	trimPosAvg.average(), startTrimPos, lastCmdMs);
 		sendCanData();
 	}
-	if (serialReportTimer.tick()) {
+	if (0 && 	serialReportTimer.tick()) {
 		sendDebugData(); 
 		Serial.printf("L: %05.3f/%05.3f/%05.3f\n", loopTimeAvg.average()/1000.0, loopTimeAvg.min()/1000.0, loopTimeAvg.max()/1000.0);
 	}
@@ -503,7 +525,7 @@ void loop() {
 			int ll = line.add(buf[i]);
 			if (ll) {
 				cmdCount++;
-				Serial.printf("LINE: %s", line.line);
+				//Serial.printf("LINE: %s", line.line);
 				int ms, val, pin, seq;
 				float f;
 				static int lastSeq = 0;
@@ -528,11 +550,13 @@ void loop() {
 				}
 				if (sscanf(line.line, "cdi %f", &f) == 1 ) {
 					debugMoveNeedles = f;
-					lastSeq = seq;
+				}
+				if (sscanf(line.line, "udpcanout %f", &f) == 1 ) {
+					udpCanOut = f;
 				}
 				if (strstr(line.line, "PMRRV")  != NULL) { 
 					Serial2.write((uint8_t *)line.line, strlen(line.line));
-					Serial.printf("G5: %s", line.line);
+					//Serial.printf("G5: %s", line.line);
 				}
 			}
 		}
