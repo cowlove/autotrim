@@ -122,8 +122,8 @@ void superSend(const char *b) {
 
 struct {
 	int count;
-	float pitch, roll, knobVal, magHdg, magTrack, ias, tas, palt;
-	int knobSel;
+	float pitch, roll, knobVal = 0, magHdg, magTrack, ias, tas, palt;
+	int knobSel, mode;
 	bool forceSend;
 	int lastId, lastSize, exceptions;
 	uint64_t timestamp;
@@ -143,10 +143,11 @@ void sendDebugData() {
 void sendCanData() { 
 	char sbuf[160];				
 	int age = millis() - isrData.timestamp;
-	snprintf(sbuf, sizeof(sbuf), "%+06.3f %+06.3f %+06.3f %+06.3f %+06.3f %+06.3f %+06.3f %d %+06.3f %d CAN\n", 
+	snprintf(sbuf, sizeof(sbuf), "%+06.3f %+06.3f %+06.3f %+06.3f %+06.3f %+06.3f %+06.3f %d %+06.3f %d %d CAN\n", 
 		isrData.pitch, isrData.roll, isrData.magHdg, isrData.magTrack, isrData.ias, isrData.tas, 
-		isrData.palt, isrData.knobSel, isrData.knobVal, age);
+		isrData.palt, isrData.knobSel, isrData.knobVal, age, isrData.mode);
 	superSend(sbuf);
+	Serial.printf("%s", sbuf);
 }
 
 void canPrint(int packetSize) { 
@@ -164,7 +165,13 @@ float floatFromBinary(const char *b) {
 	for (int n = 0; n < 4; n++) {
 		buf[n] = b[n];
 	}
-	return *(float *)&buf[0];
+	float rv = 0;
+	try {
+		rv = *(float *)&buf[0];
+	} catch(...) { 
+		rv = 0;
+	}
+	return rv;
 }
 
 void canParse(int packetSize) {
@@ -254,9 +261,10 @@ void canParse(int packetSize) {
 					Serial.printf("\n");
 				}
 				try {
-					 
-					isrData.knobVal = floatFromBinary(&ibuf[3]);
-					isrData.knobSel = ibuf[2];
+					double knobVal = floatFromBinary(&ibuf[3]);
+					int knobSel = ibuf[2];					
+					isrData.knobVal = knobVal;
+					isrData.knobSel = knobSel;
 				} catch(...) {
 					isrData.knobSel = isrData.knobVal = 0;
 					isrData.exceptions++; 
@@ -319,6 +327,31 @@ bool wifiTryConnect(const char *ap, const char *pw, int seconds = 15) {
 	
 
 bool otaInProgress = false;
+
+
+class PinPulse { 
+public:
+	int pin;
+	uint64_t toggleTime = 0;
+	PinPulse(int p, int initval = 0) : pin(p) { pinMode(p, OUTPUT); digitalWrite(p, initval); } 
+	void  pulse(int v, int ms) { 
+		toggleTime = ms > 0 ? millis() + ms: 0;
+		//Serial.printf("PIN %d VALUE %d\n", pin, v);
+		pinMode(pin, OUTPUT);
+		digitalWrite(pin, v);
+	}
+	void run() { 
+		if (toggleTime > 0 && millis() >= toggleTime) {
+			toggleTime = 0;
+			//Serial.printf("PIN %d TOGGLE\n", pin);
+			pinMode(pin, OUTPUT);
+			digitalWrite(pin, !digitalRead(pin));
+		}
+	}
+};
+
+static int cmdCount = 0;
+static PinPulse pp[] = { PinPulse(27), PinPulse(14) };
 
 void setup() {
 	esp_task_wdt_init(20, true);
@@ -390,7 +423,7 @@ public:
 			line[len++] = c;
 		if (len >= sizeof(line) || c == '\n') {
 			r = len;
-			line[len] = '\0';
+				line[len] = '\0';
 			len = 0;
 		}
 		return r;
@@ -399,30 +432,6 @@ public:
 
 EggTimer blinkTimer(500), screenTimer(200);
 EggTimer pidTimer(250);
-
-class PinPulse { 
-public:
-	int pin;
-	uint64_t toggleTime = 0;
-	PinPulse(int p, int initval = 1) : pin(p) { pinMode(p, OUTPUT); digitalWrite(p, initval); } 
-	void  pulse(int v, int ms) { 
-		toggleTime = ms > 0 ? millis() + ms: 0;
-		//Serial.printf("PIN %d VALUE %d\n", pin, v);
-		pinMode(pin, OUTPUT);
-		digitalWrite(pin, v);
-	}
-	void run() { 
-		if (toggleTime > 0 && millis() >= toggleTime) {
-			toggleTime = 0;
-			//Serial.printf("PIN %d TOGGLE\n", pin);
-			pinMode(pin, OUTPUT);
-			digitalWrite(pin, !digitalRead(pin));
-		}
-	}
-};
-
-static int cmdCount = 0;
-static PinPulse pp[] = { PinPulse(27), PinPulse(14) };
 static uint8_t buf[1024];
 
 
@@ -438,12 +447,23 @@ uint64_t nextCmdTime = 0;
 static bool debugMoveNeedles = false;
 
 
+static bool first = true;
 void loop() {
 	esp_task_wdt_reset();
 	ArduinoOTA.handle();
 	if (otaInProgress) {
 		CAN.onReceive(NULL);
 		return;
+	}
+	if (first || digitalRead(BUTTON_PIN) == 0) { 
+		first = false;
+		digitalWrite(pp[0].pin, 1);
+		delay(200);
+		digitalWrite(pp[0].pin, 0);
+		delay(200);
+		digitalWrite(pp[1].pin, 1);
+		delay(200);
+		digitalWrite(pp[1].pin, 0);
 	}
 	
 	uint64_t now = micros();
@@ -456,7 +476,7 @@ void loop() {
 		CAN.filter(0,0);
 	}
 #ifdef SCREEN
-	if (0 && pp[0].toggleTime == 0 && pp[1].toggleTime == 0 && screenTimer.tick()) { 
+	if (1 && pp[0].toggleTime == 0 && pp[1].toggleTime == 0 && screenTimer.tick()) { 
 		u8g2.setCursor(0,20);
 		u8g2.printf("CMDS: %03d TSET: %03d   ", cmdCount, (int)setPoint);
 		//u8g2.setCursor(0,30);
@@ -468,6 +488,7 @@ void loop() {
 	for (int n =0; n < sizeof(pp)/sizeof(pp[0]); n++) { 
 		pp[n].run();
 	}
+
 	trimPosAvg.add(analogRead(33));
 	if (pinReportTimer.tick() || isrData.forceSend) { 
 		isrData.forceSend = false;
@@ -487,22 +508,14 @@ void loop() {
 		}
 		if (abs(c) > 10) {
 			if (c < 0) {
-				pp[0].pulse(0, abs(c));
+				pp[0].pulse(1, abs(c));
 			} else { 
-				pp[1].pulse(0, abs(c));
+				pp[1].pulse(1, abs(c));
 			}
 		}
 		nextCmdTime = millis() + (int)abs(c) + 50;  // schedule time for PID to run. 
 	}
-	if (digitalRead(BUTTON_PIN) == 0) { 
-		digitalWrite(pp[0].pin, 0);
-		delay(1000);
-		digitalWrite(pp[0].pin, 1);
-		delay(100);
-		digitalWrite(pp[1].pin, 0);
-		delay(2000);
-		digitalWrite(pp[1].pin, 1);
-	}
+		
 	
 	if (Serial.available()) {
 		static LineBuffer line;
@@ -571,4 +584,22 @@ void loop() {
 		if (vd > 2) vd = -2;
 		sl30.setCDI(hd, vd);
 	}
+
+	static float lastKnobVal = 0;
+	static uint64_t lastKnobMillis = 0;
+	if (isrData.knobVal != lastKnobVal) { 
+		if (millis() - lastKnobMillis > 500) 
+			isrData.mode = 0;
+		lastKnobMillis = millis();
+		double delta = isrData.knobVal - lastKnobVal;
+		bool oneDegree = abs(delta) < 1.5/180*M_PI && abs(delta) > 0.5/180*M_PI;
+		bool evenMode = (isrData.mode & 0x1) == 0;
+		if (/*knobSel == isrData.knobSel &&*/ oneDegree && ((delta > 0 && evenMode) || (delta < 0 && !evenMode))) {
+			isrData.mode++;
+		} else {
+			isrData.mode = 0;
+		}
+		lastKnobVal = isrData.knobVal;
+	}
+
 }
