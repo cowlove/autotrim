@@ -65,9 +65,16 @@ const char *udpHost = "255.255.255.255";
 //               7891 - g5 out
 //               7892 - ifly in
 //               7893 - ifly out
+//				 7894 - debug can data out
+
+
+// OBS knob toggle mode settings
+// 0-3: HDG mode
+// 4: NAV mode
+// 5: CDI needle test movement
+// 6: CAN data udp dump (port 7894) 
 
 int udpPortIn = 7892;
-int udpCanOut = 0;
 
 // From data format described in web search "SL30 Installation Manual PDF" 
 class SL30 {
@@ -104,7 +111,7 @@ public:
 
 SL30 sl30;
 
-
+// send udp packet multiple times on broadcast address and all addresses in normal EchoUAT wifi range 
 void superSend(const char *b) { 
    for (int repeat = 0; repeat < 2; repeat++) { 
 		udp.beginPacket("255.255.255.255", 7891);
@@ -174,6 +181,8 @@ float floatFromBinary(const char *b) {
 	return rv;
 }
 
+int udpCanOut = 0; // debug output, send all CAN data out over udp port
+
 void canParse(int packetSize) {
 	static char ibuf[1024];
 	static int mpSize = 0;
@@ -181,6 +190,15 @@ void canParse(int packetSize) {
 	// try to parse packet
 	if (packetSize) {
 		if (CAN.packetId() != lastId || mpSize >= sizeof(ibuf)) {
+			
+			// TODO: move all this complicated debugging output out from the ISR
+			if (udpCanOut) { 
+				udp.beginPacket("255.255.255.255", 7894);
+				udp.write((uint8_t *)&lastId, sizeof(lastId));
+				udp.write((uint8_t *)&mpSize, sizeof(mpSize));
+				udp.write((uint8_t *)ibuf, mpSize);
+				udp.endPacket();
+			}		
 			if (0) {
 				static char obuf[1024];
 				snprintf(obuf, sizeof(obuf), " (%.3f) can0 %08x [%02d] ", millis() / 1000.0, lastId, mpSize);
@@ -197,8 +215,8 @@ void canParse(int packetSize) {
 				obuf[outlen] = 0;				
 				Serial.print(obuf);
 				
-				if (udpCanOut > 0) { 
-					udp.beginPacket("255.255.255.255", udpCanOut);
+				if (udpCanOut) { 
+					udp.beginPacket("255.255.255.255", 7894);
 					udp.write((uint8_t *)obuf, outlen);
 					udp.endPacket();
 				}		
@@ -442,7 +460,8 @@ float startTrimPos = 0;
 RollingAverage<long int,1000> loopTimeAvg;
 uint64_t lastLoopTime = -1;
 EggTimer serialReportTimer(1000);
-EggTimer pinReportTimer(200), canResetTimer(5000);
+EggTimer pinReportTimer(200), canResetTimer(5000), sl30Heartbeat(1000);
+
 uint64_t nextCmdTime = 0;
 static bool debugMoveNeedles = false;
 
@@ -496,7 +515,7 @@ void loop() {
 		//	trimPosAvg.average(), startTrimPos, lastCmdMs);
 		sendCanData();
 	}
-	if (0 && 	serialReportTimer.tick()) {
+	if (0 && serialReportTimer.tick()) {
 		sendDebugData(); 
 		Serial.printf("L: %05.3f/%05.3f/%05.3f\n", loopTimeAvg.average()/1000.0, loopTimeAvg.min()/1000.0, loopTimeAvg.max()/1000.0);
 	}
@@ -515,7 +534,6 @@ void loop() {
 		}
 		nextCmdTime = millis() + (int)abs(c) + 50;  // schedule time for PID to run. 
 	}
-		
 	
 	if (Serial.available()) {
 		static LineBuffer line;
@@ -577,12 +595,16 @@ void loop() {
 
 	static double hd = 0, vd = 0;
 	static EggTimer g5Timer(100);
-	if (g5Timer.tick() && debugMoveNeedles) { 
+	if (g5Timer.tick() && (debugMoveNeedles || isrData.mode == 5)) { 
 		hd += .1;
 		vd += .15;
 		if (hd > 2) hd = -2;
 		if (vd > 2) vd = -2;
 		sl30.setCDI(hd, vd);
+	}
+	
+	if (sl30Heartbeat.tick()) { 
+		sl30.pmrrv("301234E"); // send arbitary NAV software version packet as heartbeat
 	}
 
 	static float lastKnobVal = 0;
@@ -600,6 +622,6 @@ void loop() {
 			isrData.mode = 0;
 		}
 		lastKnobVal = isrData.knobVal;
-	}
-
+	}	
+	udpCanOut = (isrData.mode == 6);
 }
