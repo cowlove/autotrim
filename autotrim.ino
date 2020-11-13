@@ -21,6 +21,7 @@
 #include <ESP8266mDNS.h>
 #endif
 
+#include "mySD.h"
 #include "FS.h"
 #include "ArduinoOTA.h"
 #include "WiFiUdp.h"
@@ -47,6 +48,7 @@ U8G2_SSD1306_128X64_NONAME_F_SW_I2C u8g2(U8G2_R0, /* clock=*/ 15, /* data=*/ 4, 
 
 struct CanPacket { 
 	uint8_t *buf;
+	uint64_t timestamp;
 	int len;
 	int id;
 };
@@ -144,6 +146,7 @@ public:
 };
 
 SL30 sl30;
+msdFile fd;
 
 // send udp packet multiple times on broadcast address and all addresses in normal EchoUAT wifi range 
 void superSend(const char *b) { 
@@ -177,6 +180,7 @@ struct {
 uint8_t canDebugBuf[1024];
 PidControl pid(2);
 static RollingAverage<int,1000> trimPosAvg;
+int canSerial = 0;
 
 void sendDebugData() { 
 	char sbuf[160];				
@@ -193,6 +197,7 @@ void sendCanData() {
 		isrData.pitch, isrData.roll, isrData.magHdg, isrData.magTrack, isrData.ias, isrData.tas, 
 		isrData.palt, isrData.knobSel, isrData.knobVal, age, isrData.mode);
 	superSend(sbuf);
+	fd.write(sbuf, strlen(sbuf));
 	//Serial.printf("%d\t%d\t%s", isrData.udpSent, isrData.count, sbuf);
 }
 
@@ -222,6 +227,52 @@ float floatFromBinary(const char *b) {
 
 int udpCanOut = 0; // debug output, send all CAN data out over udp port
 
+
+void open_TTGOTS_SD() { 
+	for (int retries = 0; retries < 2; retries++) { 	
+		Serial.print("Initializing SD card...");
+		if (SD.begin(13, 15, 2, 14)) { 
+			Serial.println("initialization done.");
+			return;
+		}
+		Serial.println("initialization failed!");
+		delay(100);
+	}
+	Serial.println("giving up");
+}
+
+void openLogFile(const char *filename) {
+	open_TTGOTS_SD(); 
+	int fileVer = 1;
+	char fname[20];
+	if (strchr(filename, '%')) { // if filename contains '%', scan for existing files  
+		for(fileVer = 1; fileVer < 999; fileVer++) {
+			snprintf(fname, sizeof(fname), filename, fileVer);
+			if (!(fd = SD.open(fname, (F_READ)))) {
+				fd.close();
+				fd = SD.open(fname, (F_READ | F_WRITE | F_CREAT));
+				Serial.printf("Opened %s\n", fname);
+				return;
+			}
+		} 
+	}
+}
+
+void canToText(const char *ibuf, int lastId, int mpSize, uint64_t ts, char *obuf, int obufsz) { 
+	snprintf(obuf, obufsz, " (%.3f) can0 %08x [%02d] ", ts / 1000.0, lastId, mpSize);
+	int outlen = strlen(obuf);
+	for(int n = 0; n < mpSize; n++) {
+		if (n > 0 && (n % 8) == 0) { 
+			snprintf(obuf + outlen, obufsz - outlen, " ");
+			outlen += 1;
+		} 
+		snprintf(obuf + outlen, obufsz - outlen, "%02x", ibuf[n]);
+		outlen += 2;
+	}
+	obuf[outlen++] = '\n';
+	obuf[outlen] = 0;				
+}
+
 void canParse(int packetSize) {
 	static char ibuf[1024];
 	static int mpSize = 0;
@@ -236,11 +287,12 @@ void canParse(int packetSize) {
 			isrData.lastSize = mpSize;
 			
 			// TODO: move all this complicated debugging output out from the ISR
-			if (0 /*udpCanOut*/) { 
+			if (fd != NULL) { 
 				if (!qEmpty.empty()) {
 					CanPacket pkt;
 					pkt.buf = qEmpty.front();
-					qEmpty.pop();					
+					qEmpty.pop();	
+					pkt.timestamp = millis();				
 					pkt.id = lastId;
 					pkt.len = mpSize;
 					memcpy(pkt.buf, ibuf, mpSize);
@@ -250,20 +302,9 @@ void canParse(int packetSize) {
 				}
 			}		
 
-			if (0) {
+			if (canSerial) {
 				static char obuf[1024];
-				snprintf(obuf, sizeof(obuf), " (%.3f) can0 %08x [%02d] ", millis() / 1000.0, lastId, mpSize);
-				int outlen = strlen(obuf);
-				for(int n = 0; n < mpSize; n++) {
-					if (n > 0 && (n % 8) == 0) { 
-						snprintf(obuf + outlen, sizeof(obuf) - outlen, " ");
-						outlen += 1;
-					} 
-					snprintf(obuf + outlen, sizeof(obuf) - outlen, "%02x", ibuf[n]);
-					outlen += 2;
-				}
-				obuf[outlen++] = '\n';
-				obuf[outlen] = 0;				
+				canToText(ibuf, lastId, mpSize, millis(), obuf, sizeof(obuf));
 				Serial.print(obuf);
 			}
 			
@@ -478,7 +519,9 @@ void setup() {
 		otaInProgress = true;
 	});
 	
-	for (int n = 0; n < 10; n++) {
+	openLogFile("CAN%03d.TXT");
+	
+	for (int n = 0; n < 30; n++) {
 		qEmpty.push((uint8_t *)malloc(1024));
 	}
 	canInit();
@@ -513,7 +556,7 @@ float startTrimPos = 0;
 RollingAverage<long int,1000> loopTimeAvg;
 uint64_t lastLoopTime = -1;
 EggTimer serialReportTimer(1000);
-EggTimer pinReportTimer(200), canResetTimer(5000), sl30Heartbeat(1000);
+EggTimer pinReportTimer(200), canResetTimer(5000), sl30Heartbeat(1000), sdCardFlush(2000);
 
 uint64_t nextCmdTime = 0;
 static bool debugMoveNeedles = false;
@@ -528,17 +571,25 @@ void loop() {
 		CAN.end();
 		return;
 	}
-	while(qFull.empty() == false) {
+	if (qFull.empty() == false) {
+		static char obuf[1024];
 		struct CanPacket pkt = qFull.front();
 		qFull.pop();
 		
-		if (udp.beginPacket("255.255.255.255", 7894) == 0) 
-			isrData.udpErrs++;
-		udp.write((uint8_t *)&pkt.id, sizeof(pkt.id));
-		udp.write((uint8_t *)&pkt.len, sizeof(pkt.len));
-		udp.write(pkt.buf, pkt.len);
-		if (udp.endPacket() == 0) 
-			isrData.udpErrs++;
+		canToText((char *)pkt.buf, pkt.id, pkt.len, pkt.timestamp, obuf, sizeof(obuf));
+		fd.write(obuf, strlen(obuf));
+		if (sdCardFlush.tick()) 
+			fd.flush();
+		
+		if (udpCanOut) { 
+			if (udp.beginPacket("255.255.255.255", 7894) == 0) 
+				isrData.udpErrs++;
+			udp.write((uint8_t *)&pkt.id, sizeof(pkt.id));
+			udp.write((uint8_t *)&pkt.len, sizeof(pkt.len));
+			udp.write(pkt.buf, pkt.len);
+			if (udp.endPacket() == 0) 
+				isrData.udpErrs++;
+		}
 		isrData.udpSent++;
 		qEmpty.push(pkt.buf);
 	}
@@ -585,7 +636,8 @@ void loop() {
 	}
 	if (1 && serialReportTimer.tick()) {
 		//sendDebugData(); 
-		//Serial.printf("L: %05.3f/%05.3f/%05.3f err:%d\n", loopTimeAvg.average()/1000.0, loopTimeAvg.min()/1000.0, loopTimeAvg.max()/1000.0, isrData.udpErrs);
+		fd.printf("L: %05.3f/%05.3f/%05.3f err:%d can:%d drop:%d\n", loopTimeAvg.average()/1000.0, loopTimeAvg.min()/1000.0, loopTimeAvg.max()/1000.0, 
+			isrData.udpErrs, isrData.count, isrData.debugDropped);
 	}
 
 	if (millis() > nextCmdTime && setPoint != -1) { 
@@ -650,8 +702,11 @@ void loop() {
 				if (sscanf(line.line, "cdi %f", &f) == 1 ) {
 					debugMoveNeedles = f;
 				}
-				if (sscanf(line.line, "udpcanout %f", &f) == 1 ) {
+				if (sscanf(line.line, "canudp %f", &f) == 1 ) {
 					udpCanOut = f;
+				}
+				if (sscanf(line.line, "canserial %f", &f) == 1 ) {
+					canSerial = f;
 				}
 				if (strstr(line.line, "PMRRV")  != NULL) { 
 					Serial2.write((uint8_t *)line.line, strlen(line.line));
@@ -661,13 +716,19 @@ void loop() {
 		}
 	}
 
+	static int startupPeriod = 20000;
+	if (millis() > startupPeriod)
+		startupPeriod = 0;
+
 	static double hd = 0, vd = 0;
 	static EggTimer g5Timer(100);
-	if (g5Timer.tick() && (debugMoveNeedles || isrData.mode == 5)) { 
+	if (g5Timer.tick() && (debugMoveNeedles || isrData.mode == 5 || startupPeriod > 0)) { 
 		hd += .1;
 		vd += .15;
 		if (hd > 2) hd = -2;
 		if (vd > 2) vd = -2;
+		if (millis() - isrData.timestamp > 100) 
+			hd = vd = -2;
 		sl30.setCDI(hd, vd);
 	}
 	
