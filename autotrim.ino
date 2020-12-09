@@ -1,10 +1,13 @@
 #include <HardwareSerial.h>
 #include "SPI.h"
 #include <CAN.h>
+#include <SPIFFS.h>
 //#include "Update.h"
 
 //  
 // ./parse_sweep ./sweep6_unidirectional_battery_power.txt | grep PR | gnuplot -e 'p "-" u 2:3; pause 10;'
+
+
 
 
 #ifdef ESP32
@@ -30,21 +33,23 @@
 #include "RunningLeastSquares.h"
 #include "PidControl.h"
 #define LED_PIN 2
+#include "jimlib.h"
 
 #ifdef ESP32
 #include "WiFiMulti.h"
 WiFiMulti wifi;
-
-#define SCREEN
-#ifdef SCREEN
-#include <U8g2lib.h>
-#include <U8x8lib.h>
-U8G2_SSD1306_128X64_NONAME_F_SW_I2C u8g2(U8G2_R0, /* clock=*/ 15, /* data=*/ 4, /* reset=*/ 16);
-#endif
-
 #endif
 
 #include <queue>
+
+namespace Display {
+	JDisplay jd;
+	int y = 0;
+	const int c2x = 70;
+	JDisplayItem<const char *>  ip(&jd,10,y,"WIFI:", "%s ");
+	JDisplayItem<float>  sec(&jd,10,y+=10," SEC:", "%.02f ");
+}
+
 
 struct CanPacket { 
 	uint8_t *buf;
@@ -90,7 +95,7 @@ const struct {
 	int relay2 = 22;
 	int serialTx = 27; 
 	int serialRx = 0; /* unused */
-	int button = 34;
+	int button = 39;
 } pins;
 
 WiFiUDP udp;
@@ -227,19 +232,6 @@ float floatFromBinary(const char *b) {
 
 int udpCanOut = 0; // debug output, send all CAN data out over udp port
 
-
-void open_TTGOTS_SD() { 
-	for (int retries = 0; retries < 2; retries++) { 	
-		Serial.print("Initializing SD card...");
-		if (SD.begin(13, 15, 2, 14)) { 
-			Serial.println("initialization done.");
-			return;
-		}
-		Serial.println("initialization failed!");
-		delay(100);
-	}
-	Serial.println("giving up");
-}
 
 void openLogFile(const char *filename) {
 	open_TTGOTS_SD(); 
@@ -401,20 +393,6 @@ void canInit() {
 }
 
 
-class EggTimer {
-	uint64_t last;
-	int interval; 
-public:
-	EggTimer(int ms) : interval(ms), last(0) {}
-	bool tick() { 
-		uint64_t now = millis();
-		if (now - last > interval) { 
-			last = now;
-			return true;
-		} 
-		return false;
-	}
-};
 
 
 bool wifiTryConnect(const char *ap, const char *pw, int seconds = 15) { 
@@ -471,14 +449,10 @@ void setup() {
 	pinMode(LED_PIN, OUTPUT);
 	pinMode(pins.button, INPUT_PULLUP);
 //	pinMode(3,INPUT);
-#ifdef SCREEN
-	u8g2.begin();
-	u8g2.clearBuffer();					// clear the internal memory
-	u8g2.setFont(u8g2_font_courB08_tr);	// choose a suitable font
-	u8g2.setCursor(0,10);				// set write position
-	u8g2.println("Searching for WiFi");
-	u8g2.sendBuffer();
-#endif
+
+	Display::jd.begin();
+	Display::jd.clear();
+	Display::jd.forceUpdate();
 	
 	wifi.addAP("Ping-582B", "");
 	wifi.addAP("Flora_2GEXT", "maynards");
@@ -486,63 +460,39 @@ void setup() {
 	wifi.addAP("ChloeNet", "niftyprairie7");
 	uint64_t startms = millis();
 	Serial.printf("Waiting for wifi...\n");
-	while (WiFi.status() != WL_CONNECTED) {
+	while (digitalRead(pins.button) != 0 && WiFi.status() != WL_CONNECTED) {
 		wifi.run();
 		delay(10);
 		if (millis() - startms > 21000)
 						break;
 	}
 
-
-#ifdef SCREEN
-	u8g2.clearBuffer();					// clear the internal memory
-	u8g2.setFont(u8g2_font_courB08_tr);	// choose a suitable font
-	u8g2.setCursor(0,10);				// set write position
-	u8g2.println(WiFi.localIP());
-	u8g2.sendBuffer();
-#endif
 	digitalWrite(LED_PIN, 1);
 
-	udp.begin(udpPortIn);
+	if (WiFi.status() == WL_CONNECTED) {
+		udp.begin(udpPortIn);
+		ArduinoOTA.begin();
+		ArduinoOTA.onStart([]() {
+			esp_task_wdt_delete(NULL);
+			CAN.onReceive(NULL);
+			CAN.end();
+			Serial.println("Start");
+			otaInProgress = true;
+		});
+		openLogFile("CAN%03d.TXT");
+	}
 	
 	adcAttachPin(pins.ADC);
 	analogSetCycles(255);
 	pid.setGains(4, 0, 0);
 	pid.finalGain = 1;
 
-	ArduinoOTA.begin();
-	ArduinoOTA.onStart([]() {
-		esp_task_wdt_delete(NULL);
-		CAN.onReceive(NULL);
-		CAN.end();
-		Serial.println("Start");
-		otaInProgress = true;
-	});
-	
-	openLogFile("CAN%03d.TXT");
 	
 	for (int n = 0; n < 30; n++) {
 		qEmpty.push((uint8_t *)malloc(1024));
 	}
 	canInit();
 }
-
-class LineBuffer {
-public:
-	char line[1024];
-	char len;
-	int add(char c) {
-		int r = 0; 
-		if (c != '\r' && c != '\n');
-			line[len++] = c;
-		if (len >= sizeof(line) || c == '\n') {
-			r = len;
-				line[len] = '\0';
-			len = 0;
-		}
-		return r;
-	}
-};
 
 EggTimer blinkTimer(500), screenTimer(200);
 EggTimer pidTimer(250);
@@ -555,7 +505,7 @@ float startTrimPos = 0;
 
 RollingAverage<long int,1000> loopTimeAvg;
 uint64_t lastLoopTime = -1;
-EggTimer serialReportTimer(1000);
+EggTimer serialReportTimer(1000), displayTimer(1000);
 EggTimer pinReportTimer(200), canResetTimer(5000), sl30Heartbeat(1000), sdCardFlush(2000);
 
 uint64_t nextCmdTime = 0;
@@ -571,6 +521,11 @@ void loop() {
 		CAN.end();
 		return;
 	}
+	if (displayTimer.tick()) { 
+		Display::sec = millis() / 1000.0;
+		Display::jd.update(false, false);
+	}
+	
 	if (qFull.empty() == false) {
 		static char obuf[1024];
 		struct CanPacket pkt = qFull.front();
@@ -593,7 +548,8 @@ void loop() {
 		isrData.udpSent++;
 		qEmpty.push(pkt.buf);
 	}
-	if (first || digitalRead(pins.button) == 0) { 
+		
+	if (first) { 
 		first = false;
 		digitalWrite(pp[0].pin, 1);
 		delay(200);
@@ -604,6 +560,12 @@ void loop() {
 		digitalWrite(pp[1].pin, 0);
 	}
 	
+	
+	if (digitalRead(pins.button) == 0) { 
+		pp[0].pulse(1, 1000);
+		pp[1].pulse(1, 2000);
+	} 	
+	
 	uint64_t now = micros();
 	if (lastLoopTime != -1) 
 		loopTimeAvg.add(now - lastLoopTime);
@@ -613,15 +575,6 @@ void loop() {
 	if (canResetTimer.tick()) {
 		CAN.filter(0,0);
 	}
-#ifdef SCREEN
-	if (0 && pp[0].toggleTime == 0 && pp[1].toggleTime == 0 && screenTimer.tick()) { 
-		u8g2.setCursor(0,20);
-		u8g2.printf("CMDS: %03d TSET: %03d   ", cmdCount, (int)setPoint);
-		//u8g2.setCursor(0,30);
-		//u8g2.printf("LOOP: %05.2f/%05.2f/%05.2f     ", loopTimeAvg.average()/1000.0, loopTimeAvg.min()/1000.0, loopTimeAvg.max()/1000.0);
-		u8g2.sendBuffer();
-	}
-#endif
 	
 	for (int n =0; n < sizeof(pp)/sizeof(pp[0]); n++) { 
 		pp[n].run();
@@ -630,13 +583,15 @@ void loop() {
 	trimPosAvg.add(analogRead(33));
 	if (pinReportTimer.tick()/* || isrData.forceSend*/) { 
 		isrData.forceSend = false;
-		//Serial.printf("p%d %d %.2f %.2f m %d\n", lastCmdPin,  (int)(micros() - lastCmdTime), 
-		//	trimPosAvg.average(), startTrimPos, lastCmdMs);
+		Serial.printf("p%d %d %.2f %.2f m %d pins %d %d\n", lastCmdPin,  (int)(micros() - lastCmdTime), 
+			trimPosAvg.average(), startTrimPos, lastCmdMs, digitalRead(pp[0].pin), digitalRead(pp[1].pin));
 		sendCanData();
 	}
-	if (1 && serialReportTimer.tick()) {
+	if (serialReportTimer.tick()) {
 		//sendDebugData(); 
 		fd.printf("L: %05.3f/%05.3f/%05.3f err:%d can:%d drop:%d\n", loopTimeAvg.average()/1000.0, loopTimeAvg.min()/1000.0, loopTimeAvg.max()/1000.0, 
+			isrData.udpErrs, isrData.count, isrData.debugDropped);
+		Serial.printf("%06.2f L: %05.3f/%05.3f/%05.3f err:%d can:%d drop:%d\n", millis() / 1000.0, loopTimeAvg.average()/1000.0, loopTimeAvg.min()/1000.0, loopTimeAvg.max()/1000.0, 
 			isrData.udpErrs, isrData.count, isrData.debugDropped);
 	}
 
