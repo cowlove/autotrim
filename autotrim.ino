@@ -33,7 +33,6 @@
 #include "RunningLeastSquares.h"
 #include "PidControl.h"
 #define LED_PIN 2
-#include "jimlib.h"
 
 #ifdef ESP32
 #include "WiFiMulti.h"
@@ -41,6 +40,11 @@ WiFiMulti wifi;
 #endif
 
 #include <queue>
+#include <string>
+#include <sstream>
+#include <vector>
+#include <iterator>
+#include "jimlib.h"
 
 namespace Display {
 	JDisplay jd;
@@ -51,15 +55,19 @@ namespace Display {
 }
 
 
+Mutex canMutex;
 struct CanPacket { 
-	uint8_t *buf;
+	uint8_t buf[8];
 	uint64_t timestamp;
 	int len;
 	int id;
+	int maxLen;
 };
 
-std::queue<struct CanPacket> qFull;
-std::queue<uint8_t *> qEmpty; 
+CircularBoundedQueue<CanPacket> pktQueue(256);
+
+//std::queue<struct CanPacket> qFull;
+//std::queue<uint8_t *> qEmpty; 
 
 // PINOUT Garmin G5 DB9 connection, G5 manual Appendix A.1.1 p. 156
 // Looking at front of male connector
@@ -265,119 +273,148 @@ void canToText(const char *ibuf, int lastId, int mpSize, uint64_t ts, char *obuf
 	obuf[outlen] = 0;				
 }
 
-void canParse(int packetSize) {
+void canParse(int id, int len, int timestamp, char *ibuf) { 
+	int lastId = id;
+	int mpSize = len;
+	static char obuf[1024];
+	
+	if (canSerial) {
+		canToText(ibuf, lastId, mpSize, millis(), obuf, sizeof(obuf));
+		Serial.print(obuf);
+	}
+	
+	if ((lastId == 0x18882100 || lastId == 0x188c2100) && ibuf[0] == 0xdd && ibuf[1] == 0x00 && mpSize == 60 && ibuf[15] & 0x40) {
+		try {
+			isrData.magHdg = floatFromBinary(&ibuf[16]);
+		} catch(...) {
+			isrData.magHdg = 0;
+		}
+	} 
+	if ((lastId == 0x18882100 || lastId == 0x188c2100) && ibuf[0] == 0xdd && ibuf[1] == 0x00 && mpSize == 60 && ibuf[15] & 0x20) {
+		try {
+			isrData.magTrack = floatFromBinary(&ibuf[16]);
+		} catch(...) {
+			isrData.magTrack = 0;
+		}
+	} 	
+	if (lastId == 0x18882100 && ibuf[0] == 0xdd && ibuf[1] == 0x00 && mpSize == 60) {
+		// TODO: consider 0x188c? 
+		//Serial.printf("AHRS PACKET\n"); 
+		try {
+			isrData.pitch = floatFromBinary(&ibuf[20]);
+			isrData.roll = floatFromBinary(&ibuf[24]);
+			isrData.forceSend = true;
+			isrData.timestamp = millis();
+		} catch(...) {
+			isrData.pitch = isrData.roll = 0; 
+			isrData.exceptions++;
+		}
+		//sendCanData(false);
+	}
+	if (lastId == 0x18882100 && ibuf[0] == 0xdd && ibuf[1] == 0x0a && mpSize >= 44) {
+		// TODO: consider 0x188c? 
+		//Serial.printf("PS PACKET\n"); 
+		try {
+			isrData.ias = floatFromBinary(&ibuf[12]); 
+			isrData.tas = floatFromBinary(&ibuf[16]);
+			isrData.palt = floatFromBinary(&ibuf[24]);
+			isrData.timestamp = millis();
+			isrData.forceSend = true;
+		} catch(...) {
+			isrData.ias = isrData.tas = isrData.palt = 0; 
+			isrData.exceptions++;
+		}
+		//sendCanData(false);
+	}
+	if ((lastId == 0x10882200 || lastId == 0x108c2200) 
+		&& ibuf[0] == 0xe4 && ibuf[1] == 0x65 && mpSize == 7) {
+		if (0) {
+			Serial.printf(" (%f) can0 %08x [%02d] ", micros()/1000000.0, lastId, mpSize);
+			for(int n = 0; n < mpSize; n++) {
+				if (n > 0 && (n % 8) == 0) { 
+					Serial.printf(" "); } 
+				Serial.printf("%02x", ibuf[n]);
+			}
+			Serial.printf("\n");
+		}
+		try {
+			double knobVal = floatFromBinary(&ibuf[3]);
+			int knobSel = ibuf[2];					
+			isrData.knobVal = knobVal;
+			isrData.knobSel = knobSel;
+		} catch(...) {
+			isrData.knobSel = isrData.knobVal = 0;
+			isrData.exceptions++; 
+		}
+		Serial.printf("Knob %d val %f\n", (int)isrData.knobSel, isrData.knobVal);
+		isrData.forceSend = true;
+		//sendCanData(true);
+	}
+
+
+		
+	if (fd == true) { 
+		canToText((char *)ibuf, id, len, timestamp, obuf, sizeof(obuf));
+		//fd.write(obuf, strlen(obuf));
+		//if (sdCardFlush.tick()) 
+		//	fd.flush();
+	}
+	if (udpCanOut) { 
+		if (udp.beginPacket("255.255.255.255", 7894) == 0) 
+			isrData.udpErrs++;
+		udp.write((uint8_t *)&id, sizeof(id));
+		udp.write((uint8_t *)&len, sizeof(len));
+		udp.write((const uint8_t*)ibuf, len);
+		if (udp.endPacket() == 0) 
+			isrData.udpErrs++;
+		isrData.udpSent++;
+	}
+}
+
+
+void canAssemblePacket(int timeout) { 
 	static char ibuf[1024];
 	static int mpSize = 0;
 	static int lastId = 0;
-	// try to parse packet
-	if (packetSize == 0) 
-		Serial.print("0 length packet\n");
-	if (packetSize) {
-		if (CAN.packetId() != lastId || mpSize >= sizeof(ibuf)) {
+
+	CanPacket *pkt;
+	while((pkt = pktQueue.peekTail(timeout)) != NULL) { 
+		static char obuf[1024];
+		if (pkt->id != lastId || mpSize >= sizeof(ibuf)) {
 			isrData.count++;
 			isrData.lastId = lastId;
 			isrData.lastSize = mpSize;
-			
-			// TODO: move all this complicated debugging output out from the ISR
-			if (fd != NULL) { 
-				if (!qEmpty.empty()) {
-					CanPacket pkt;
-					pkt.buf = qEmpty.front();
-					qEmpty.pop();	
-					pkt.timestamp = millis();				
-					pkt.id = lastId;
-					pkt.len = mpSize;
-					memcpy(pkt.buf, ibuf, mpSize);
-					qFull.push(pkt);
-				} else { 
-					isrData.debugDropped++;
-				}
-			}		
 
-			if (canSerial) {
-				static char obuf[1024];
-				canToText(ibuf, lastId, mpSize, millis(), obuf, sizeof(obuf));
-				Serial.print(obuf);
-			}
-			
-			if ((lastId == 0x18882100 || lastId == 0x188c2100) && ibuf[0] == 0xdd && ibuf[1] == 0x00 && mpSize == 60 && ibuf[15] & 0x40) {
-				try {
-					isrData.magHdg = floatFromBinary(&ibuf[16]);
-				} catch(...) {
-					isrData.magHdg = 0;
-				}
-			} 
-			if ((lastId == 0x18882100 || lastId == 0x188c2100) && ibuf[0] == 0xdd && ibuf[1] == 0x00 && mpSize == 60 && ibuf[15] & 0x20) {
-				try {
-					isrData.magTrack = floatFromBinary(&ibuf[16]);
-				} catch(...) {
-					isrData.magTrack = 0;
-				}
-			} 	
-			if (lastId == 0x18882100 && ibuf[0] == 0xdd && ibuf[1] == 0x00 && mpSize == 60) {
-				// TODO: consider 0x188c? 
-				//Serial.printf("AHRS PACKET\n"); 
-				try {
-					isrData.pitch = floatFromBinary(&ibuf[20]);
-					isrData.roll = floatFromBinary(&ibuf[24]);
-					isrData.forceSend = true;
-					isrData.timestamp = millis();
-				} catch(...) {
-					isrData.pitch = isrData.roll = 0; 
-					isrData.exceptions++;
-				}
-				//sendCanData(false);
-			}
-			if (lastId == 0x18882100 && ibuf[0] == 0xdd && ibuf[1] == 0x0a && mpSize >= 44) {
-				// TODO: consider 0x188c? 
-				//Serial.printf("PS PACKET\n"); 
-				try {
-					isrData.ias = floatFromBinary(&ibuf[12]); 
-					isrData.tas = floatFromBinary(&ibuf[16]);
-					isrData.palt = floatFromBinary(&ibuf[24]);
-					isrData.timestamp = millis();
-					isrData.forceSend = true;
-				} catch(...) {
-					isrData.ias = isrData.tas = isrData.palt = 0; 
-					isrData.exceptions++;
-				}
-				//sendCanData(false);
-			}
-			if ((lastId == 0x10882200 || lastId == 0x108c2200) 
-				&& ibuf[0] == 0xe4 && ibuf[1] == 0x65 && mpSize == 7) {
-				if (0) {
-					Serial.printf(" (%f) can0 %08x [%02d] ", micros()/1000000.0, lastId, mpSize);
-					for(int n = 0; n < mpSize; n++) {
-						if (n > 0 && (n % 8) == 0) { 
-							Serial.printf(" "); } 
-						Serial.printf("%02x", ibuf[n]);
-					}
-					Serial.printf("\n");
-				}
-				try {
-					double knobVal = floatFromBinary(&ibuf[3]);
-					int knobSel = ibuf[2];					
-					isrData.knobVal = knobVal;
-					isrData.knobSel = knobSel;
-				} catch(...) {
-					isrData.knobSel = isrData.knobVal = 0;
-					isrData.exceptions++; 
-				}
-				isrData.forceSend = true;
-				//sendCanData(true);
-			}
-
-			// reset for next packet
-			lastId = CAN.packetId();
+			canParse(lastId, mpSize, pkt->timestamp, ibuf);
 			mpSize = 0;
+			lastId = pkt->id;
 		}
-		if (!CAN.packetRtr()) {
-			for (int n = 0; n < packetSize; n++) {
-				ibuf[mpSize + n] = CAN.read();
+		for(int n = 0; n < pkt->len && mpSize < sizeof(ibuf); n++) {
+			ibuf[mpSize++] = pkt->buf[n];
+		}
+		pktQueue.freeTail();
+	}
+}
+
+void canIsr(int packetSize) {
+	ScopedMutex lock(canMutex);
+	if (packetSize) {
+		CanPacket *pkt = pktQueue.peekHead(0);
+		if (pkt != NULL) {
+			pkt->timestamp = millis();				
+			pkt->id = CAN.packetId();
+			pkt->len = packetSize;
+			if (!CAN.packetRtr()) {
+				for (int n = 0; n < min(packetSize, (int)sizeof(pkt->buf)); n++) {
+					pkt->buf[n] = CAN.read();
+				}
 			}
-			mpSize += packetSize;
+			pktQueue.postHead();
+		} else { 
+			isrData.debugDropped++;
 		}
 	}
+	isrData.count++;
 }
 
 
@@ -389,7 +426,7 @@ void canInit() {
 	}
 	Serial.println("CAN OPENED");
 	CAN.filter(0,0);
-	CAN.onReceive(canParse);
+	CAN.onReceive(canIsr);
 }
 
 
@@ -486,18 +523,13 @@ void setup() {
 	analogSetCycles(255);
 	pid.setGains(4, 0, 0);
 	pid.finalGain = 1;
-
 	
-	for (int n = 0; n < 30; n++) {
-		qEmpty.push((uint8_t *)malloc(1024));
-	}
 	canInit();
 }
 
 EggTimer blinkTimer(500), screenTimer(200);
 EggTimer pidTimer(250);
 static uint8_t buf[1024];
-
 
 float setPoint = -1;
 int lastCmdTime = 0, lastCmdMs = 0, lastCmdPin = 0;
@@ -526,29 +558,8 @@ void loop() {
 		Display::jd.update(false, false);
 	}
 	
-	if (qFull.empty() == false) {
-		static char obuf[1024];
-		struct CanPacket pkt = qFull.front();
-		qFull.pop();
-		
-		canToText((char *)pkt.buf, pkt.id, pkt.len, pkt.timestamp, obuf, sizeof(obuf));
-		fd.write(obuf, strlen(obuf));
-		if (sdCardFlush.tick()) 
-			fd.flush();
-		
-		if (udpCanOut) { 
-			if (udp.beginPacket("255.255.255.255", 7894) == 0) 
-				isrData.udpErrs++;
-			udp.write((uint8_t *)&pkt.id, sizeof(pkt.id));
-			udp.write((uint8_t *)&pkt.len, sizeof(pkt.len));
-			udp.write(pkt.buf, pkt.len);
-			if (udp.endPacket() == 0) 
-				isrData.udpErrs++;
-		}
-		isrData.udpSent++;
-		qEmpty.push(pkt.buf);
-	}
-		
+	canAssemblePacket(pdMS_TO_TICKS(5));
+	
 	if (first) { 
 		first = false;
 		digitalWrite(pp[0].pin, 1);
@@ -583,8 +594,8 @@ void loop() {
 	trimPosAvg.add(analogRead(33));
 	if (pinReportTimer.tick()/* || isrData.forceSend*/) { 
 		isrData.forceSend = false;
-		Serial.printf("p%d %d %.2f %.2f m %d pins %d %d\n", lastCmdPin,  (int)(micros() - lastCmdTime), 
-			trimPosAvg.average(), startTrimPos, lastCmdMs, digitalRead(pp[0].pin), digitalRead(pp[1].pin));
+		//Serial.printf("p%d %d %.2f %.2f m %d pins %d %d\n", lastCmdPin,  (int)(micros() - lastCmdTime), 
+		//	trimPosAvg.average(), startTrimPos, lastCmdMs, digitalRead(pp[0].pin), digitalRead(pp[1].pin));
 		sendCanData();
 	}
 	if (serialReportTimer.tick()) {
@@ -682,30 +693,64 @@ void loop() {
 		vd += .15;
 		if (hd > 2) hd = -2;
 		if (vd > 2) vd = -2;
-		if (millis() - isrData.timestamp > 100) 
+		if (millis() - isrData.timestamp > 1000) 
 			hd = vd = -2;
 		sl30.setCDI(hd, vd);
 	}
 	
-	if (sl30Heartbeat.tick()) { 
+	if (sl30Heartbeat.tick()) {
+		if (0) { 
+			//ScopedMutex lock(canMutex);  // panics ISR when ISR blocks too long 
+			CAN.beginExtendedPacket(0x10882200);
+			static bool alternate = 0;
+			alternate = !alternate;
+			if (alternate) { 				
+				CAN.write(0xe4);
+				CAN.write(0x65);
+				CAN.write(0x02);
+				CAN.write(0x67);
+				CAN.write(0x66);
+				CAN.write(0x98);
+				CAN.write(0x43);
+			} else { 
+				CAN.write(0xe4);
+				CAN.write(0x65);
+				CAN.write(0x02);
+				CAN.write(0xf6);
+				CAN.write(0x28);
+				CAN.write(0x89);
+				CAN.write(0x43);
+			}			
+			CAN.endPacket();
+			// alt bug change		
+			//e4650267669843
+			//e46502f6288943
+
+			// hdg bug change
+			//e465011fc92940
+			//e4650113e72a40
+		}
 		sl30.pmrrv("301234E"); // send arbitary NAV software version packet as heartbeat
 	}
 
 	static float lastKnobVal = 0;
 	static uint64_t lastKnobMillis = 0;
-	if (isrData.knobVal != lastKnobVal) { 
+	if ((isrData.knobSel == 1/*hdg*/ || isrData.knobSel == 0/*altimeter*/)  && isrData.knobVal != lastKnobVal) { 
 		if (millis() - lastKnobMillis > 500) 
 			isrData.mode = 0;
 		lastKnobMillis = millis();
 		double delta = isrData.knobVal - lastKnobVal;
 		bool oneDegree = abs(delta) < 1.5/180*M_PI && abs(delta) > 0.5/180*M_PI;
 		bool evenMode = (isrData.mode & 0x1) == 0;
-		if (/*knobSel == isrData.knobSel &&*/ oneDegree && ((delta > 0 && evenMode) || (delta < 0 && !evenMode))) {
+		if (isrData.knobSel == 0) { // for debugging, use altimeter adjustment for knob input too 
+			oneDegree = abs(delta) < 35 && abs(delta) > 30;
+		}
+		if (oneDegree && ((delta > 0 && evenMode) || (delta < 0 && !evenMode))) {
 			isrData.mode++;
 		} else {
 			isrData.mode = 0;
 		}
 		lastKnobVal = isrData.knobVal;
 	}	
-	udpCanOut = (isrData.mode == 6);
+	canSerial = udpCanOut = (isrData.mode == 6);
 }
