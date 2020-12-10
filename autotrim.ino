@@ -197,6 +197,8 @@ public:
 		}
 		Serial.println("CAN OPENED");
 		CAN.filter(0,0);
+		instancePtr = this;
+		CAN.onReceive([](int len) { CanWrapper::instancePtr->isr(len); });
 	}
 	void end() { 
 		CAN.onReceive(NULL);
@@ -240,12 +242,11 @@ public:
 		}
 		isrCount++;
 	}
+	static CanWrapper *instancePtr;
 } can;
 
-void canInit() { 
-	can.begin();
-	CAN.onReceive([](int len) { can.isr(len); });
-}
+CanWrapper *CanWrapper::instancePtr = NULL;
+
 
 uint8_t canDebugBuf[1024];
 PidControl pid(2);
@@ -481,7 +482,7 @@ void setup() {
 	pid.finalGain = 1;
 	
 	can.onReceive(canParse);
-	canInit();
+	can.begin();
 }
 
 
