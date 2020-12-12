@@ -261,6 +261,16 @@ void sendDebugData() {
 	//Serial.printf(sbuf);
 }
 
+void sendUdpCan(const char *format, ...) { 
+    va_list args;
+    va_start(args, format);
+	char buf[128];
+	vsnprintf(buf, sizeof(buf), format, args);
+	superSend(buf);
+    va_end(args);
+}
+
+
 void sendCanData() { 
 	char sbuf[160];				
 	int age = millis() - isrData.timestamp;
@@ -332,6 +342,7 @@ void canParse(int id, int len, int timestamp, const char *ibuf) {
 	if ((lastId == 0x18882100 || lastId == 0x188c2100) && ibuf[0] == 0xdd && ibuf[1] == 0x00 && mpSize == 60 && ibuf[15] & 0x40) {
 		try {
 			isrData.magHdg = floatFromBinary(&ibuf[16]);
+			sendUdpCan("HDG=%.5f\n", isrData.magHdg * 180/M_PI);
 		} catch(...) {
 			isrData.magHdg = 0;
 		}
@@ -339,18 +350,18 @@ void canParse(int id, int len, int timestamp, const char *ibuf) {
 	if ((lastId == 0x18882100 || lastId == 0x188c2100) && ibuf[0] == 0xdd && ibuf[1] == 0x00 && mpSize == 60 && ibuf[15] & 0x20) {
 		try {
 			isrData.magTrack = floatFromBinary(&ibuf[16]);
+			sendUdpCan("TRK=%.5f\n", isrData.magTrack * 180/M_PI);
 		} catch(...) {
 			isrData.magTrack = 0;
 		}
 	} 	
 	if (lastId == 0x18882100 && ibuf[0] == 0xdd && ibuf[1] == 0x00 && mpSize == 60) {
-		// TODO: consider 0x188c? 
-		//Serial.printf("AHRS PACKET\n"); 
 		try {
 			isrData.pitch = floatFromBinary(&ibuf[20]);
 			isrData.roll = floatFromBinary(&ibuf[24]);
 			isrData.forceSend = true;
 			isrData.timestamp = millis();
+			sendUdpCan("P=%f R=%f\n", isrData.pitch* 180/M_PI, isrData.roll* 180/M_PI);
 		} catch(...) {
 			isrData.pitch = isrData.roll = 0; 
 			isrData.exceptions++;
@@ -358,14 +369,13 @@ void canParse(int id, int len, int timestamp, const char *ibuf) {
 		//sendCanData(false);
 	}
 	if (lastId == 0x18882100 && ibuf[0] == 0xdd && ibuf[1] == 0x0a && mpSize >= 44) {
-		// TODO: consider 0x188c? 
-		//Serial.printf("PS PACKET\n"); 
 		try {
 			isrData.ias = floatFromBinary(&ibuf[12]); 
 			isrData.tas = floatFromBinary(&ibuf[16]);
 			isrData.palt = floatFromBinary(&ibuf[24]);
 			isrData.timestamp = millis();
 			isrData.forceSend = true;
+			sendUdpCan("IAS=%f TAS=%f PALT=%f", isrData.ias / 0.5144, isrData.tas / 0.5144, isrData.palt / 3.2808);
 		} catch(...) {
 			isrData.ias = isrData.tas = isrData.palt = 0; 
 			isrData.exceptions++;
@@ -374,29 +384,43 @@ void canParse(int id, int len, int timestamp, const char *ibuf) {
 	}
 	if ((lastId == 0x10882200 || lastId == 0x108c2200) 
 		&& ibuf[0] == 0xe4 && ibuf[1] == 0x65 && mpSize == 7) {
-		if (0) {
-			Serial.printf(" (%f) can0 %08x [%02d] ", micros()/1000000.0, lastId, mpSize);
-			for(int n = 0; n < mpSize; n++) {
-				if (n > 0 && (n % 8) == 0) { 
-					Serial.printf(" "); } 
-				Serial.printf("%02x", ibuf[n]);
-			}
-			Serial.printf("\n");
-		}
 		try {
 			double knobVal = floatFromBinary(&ibuf[3]);
 			int knobSel = ibuf[2];					
 			isrData.knobVal = knobVal;
 			isrData.knobSel = knobSel;
+			sendUdpCan("KSEL=%d KVAL=%f\n", knobSel, knobVal);
 		} catch(...) {
 			isrData.knobSel = isrData.knobVal = 0;
 			isrData.exceptions++; 
 		}
-		Serial.printf("Knob %d val %f\n", (int)isrData.knobSel, isrData.knobVal);
+		//Serial.printf("Knob %d val %f\n", (int)isrData.knobSel, isrData.knobVal);
 		isrData.forceSend = true;
 		//sendCanData(true);
 	}
-		
+
+	static float lastKnobVal = 0;
+	static uint64_t lastKnobMillis = 0;
+	if ((isrData.knobSel == 1/*hdg*/ || isrData.knobSel == 0/*altimeter*/)  && isrData.knobVal != lastKnobVal) { 
+		if (millis() - lastKnobMillis > 500) 
+			isrData.mode = 0;
+		lastKnobMillis = millis();
+		double delta = isrData.knobVal - lastKnobVal;
+		bool oneDegree = abs(delta) < 1.5/180*M_PI && abs(delta) > 0.5/180*M_PI;
+		bool evenMode = (isrData.mode & 0x1) == 0;
+		if (isrData.knobSel == 0) { // for debugging, use altimeter adjustment for knob input too 
+			oneDegree = abs(delta) < 35 && abs(delta) > 30;
+		}
+		if (oneDegree && ((delta > 0 && evenMode) || (delta < 0 && !evenMode))) {
+			isrData.mode++;
+			sendUdpCan("MODE=%d\n", isrData.mode);
+		} else if (isrData.mode != 0) { 
+			isrData.mode = 0;
+			sendUdpCan("MODE=%d\n", isrData.mode);
+		}
+		lastKnobVal = isrData.knobVal;
+	}	
+
 	if (fd == true) { 
 		canToText((char *)ibuf, id, len, timestamp, obuf, sizeof(obuf));
 		fd.write(obuf, strlen(obuf));
@@ -659,25 +683,5 @@ void loop() {
 		}
 		sl30.pmrrv("301234E"); // send arbitary NAV software version packet as heartbeat
 	}
-
-	static float lastKnobVal = 0;
-	static uint64_t lastKnobMillis = 0;
-	if ((isrData.knobSel == 1/*hdg*/ || isrData.knobSel == 0/*altimeter*/)  && isrData.knobVal != lastKnobVal) { 
-		if (millis() - lastKnobMillis > 500) 
-			isrData.mode = 0;
-		lastKnobMillis = millis();
-		double delta = isrData.knobVal - lastKnobVal;
-		bool oneDegree = abs(delta) < 1.5/180*M_PI && abs(delta) > 0.5/180*M_PI;
-		bool evenMode = (isrData.mode & 0x1) == 0;
-		if (isrData.knobSel == 0) { // for debugging, use altimeter adjustment for knob input too 
-			oneDegree = abs(delta) < 35 && abs(delta) > 30;
-		}
-		if (oneDegree && ((delta > 0 && evenMode) || (delta < 0 && !evenMode))) {
-			isrData.mode++;
-		} else {
-			isrData.mode = 0;
-		}
-		lastKnobVal = isrData.knobVal;
-	}	
 	canSerial = udpCanOut = (isrData.mode == 6);
 }
