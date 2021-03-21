@@ -1,1 +1,10 @@
-
+a.out
+*.txt
+*.can
+jimlib.h
+*.sh
+typescript
+junk
+*.out
+*.dat
+*.OK

@@ -1,7 +1,7 @@
 #include <HardwareSerial.h>
 #include "SPI.h"
 #include <CAN.h>
-#include <SPIFFS.h>
+//#include <SPIFFS.h>
 //#include "Update.h"
 
 //  
@@ -25,7 +25,7 @@
 #endif
 
 #include "mySD.h"
-#include "FS.h"
+//#include "FS.h"
 #include "ArduinoOTA.h"
 #include "WiFiUdp.h"
 #include "Wire.h"
@@ -501,7 +501,7 @@ void setup() {
 	}
 	
 	adcAttachPin(pins.ADC);
-	analogSetCycles(255);
+	//analogSetCycles(255);
 	pid.setGains(4, 0, 0);
 	pid.finalGain = 1;
 	
