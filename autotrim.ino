@@ -1,6 +1,3 @@
-#include <HardwareSerial.h>
-#include "SPI.h"
-#include <CAN.h>
 //#include <SPIFFS.h>
 //#include "Update.h"
 
@@ -9,42 +6,46 @@
 
 
 
-
-#ifdef ESP32
-#include "Update.h"
+#ifndef UBUNTU
+#include "Update.h"				
 #include "WebServer.h"
 #include "DNSServer.h"
 #include "ESPmDNS.h"
 #include <esp_task_wdt.h>
-
-#else
-#include <ESP8266WiFi.h>
-#include <WiFiClient.h>
-#include <ESP8266WebServer.h>
-#include <ESP8266mDNS.h>
-#endif
-
 #include "mySD.h"
+#include <HardwareSerial.h>
+#include "SPI.h"
+#include <CAN.h>
 //#include "FS.h"
 #include "ArduinoOTA.h"
 #include "WiFiUdp.h"
 #include "Wire.h"
+#include "WiFiMulti.h"
+
+#else
+#include "ESP32sim_ubuntu.h"
+#endif
+
 
 #include "RunningLeastSquares.h"
 #include "PidControl.h"
 #define LED_PIN 2
 
-#ifdef ESP32
-#include "WiFiMulti.h"
 WiFiMulti wifi;
-#endif
-
+	
 #include <queue>
 #include <string>
 #include <sstream>
 #include <vector>
 #include <iterator>
 #include "jimlib.h"
+
+#include "G90Parser.h"
+
+WiFiUDP udpG90;
+GDL90Parser gdl90;
+GDL90Parser::State state;
+
 
 namespace Display {
 	JDisplay jd;
@@ -139,8 +140,6 @@ static bool debugMoveNeedles = false;
 
 static bool first = true;
 
-
-
 // send udp packet multiple times on broadcast address and all addresses in normal EchoUAT wifi range 
 void superSend(const char *b) { 
    for (int repeat = 0; repeat < 2; repeat++) { 
@@ -188,7 +187,7 @@ class CanWrapper {
 public:
 	int isrCount = 0, pktCount = 0, dropped = 0;
 	void onReceive(	void (*f)(int, int, int, const char *)){ onCanPacket = f; }
-
+	
 	void begin() { 
 		CAN.setPins(pins.canRx, pins.canTx);     
 		if (!CAN.begin(1000E3)) {
@@ -298,6 +297,7 @@ float floatFromBinary(const char *b) {
 }
 
 void openLogFile(const char *filename) {
+#ifndef UBUNTU
 	open_TTGOTS_SD(); 
 	int fileVer = 1;
 	char fname[20];
@@ -312,6 +312,8 @@ void openLogFile(const char *filename) {
 			}
 		} 
 	}
+#endif
+
 }
 
 void canToText(const char *ibuf, int lastId, int mpSize, uint64_t ts, char *obuf, int obufsz) { 
@@ -500,6 +502,8 @@ void setup() {
 		openLogFile("CAN%03d.TXT");
 	}
 	
+	udpG90.begin(4000);
+	
 	adcAttachPin(pins.ADC);
 	//analogSetCycles(255);
 	pid.setGains(4, 0, 0);
@@ -548,7 +552,7 @@ void loop() {
 		//Serial.printf("p%d %d %.2f %.2f m %d pins %d %d\n", lastCmdPin,  (int)(micros() - lastCmdTime), 
 		//	trimPosAvg.average(), startTrimPos, lastCmdMs, digitalRead(pp[0].pin), digitalRead(pp[1].pin));
 		sendCanData();
-	}
+			}
 	if (serialReportTimer.tick()) {
 		//sendDebugData(); 
 		fd.printf("L: %05.3f/%05.3f/%05.3f err:%d can:%d drop:%d\n", loopTimeAvg.average()/1000.0, loopTimeAvg.min()/1000.0, loopTimeAvg.max()/1000.0, 
@@ -585,10 +589,10 @@ void loop() {
 		}
 	}
 	
-	unsigned int avail;
+	int avail;
 	if ((avail = udp.parsePacket()) > 0) {
 		static LineBuffer line;
-		int r = udp.read(buf, min(avail, sizeof(buf)));
+		int r = udp.read(buf, min(avail, (int)sizeof(buf)));
 		for (int i = 0; i < r; i++) {
 			int ll = line.add(buf[i]);
 			if (ll) {
@@ -683,5 +687,67 @@ void loop() {
 		}
 		sl30.pmrrv("301234E"); // send arbitary NAV software version packet as heartbeat
 	}
+	
+	avail = udpG90.parsePacket();
+	while(avail > 0) {
+		unsigned char buf[1024]; 
+		int recsize = udpG90.read(buf, min(avail,(int)sizeof(buf)));
+		if (recsize <= 0)
+				break;
+		avail -= recsize;
+		for (int i = 0; i < recsize; i++) {  
+			gdl90.add(buf[i]);
+			GDL90Parser::State s = gdl90.getState();
+			if (s.valid && s.updated) {
+				int vvel = (signed short)(s.vvel * 64);
+				Serial.printf("GDL90 packets %d errors %d  lat %f, lon %f, track %f, palt %d, galt %d, vvel %d, hvel %d\n", 
+					gdl90.msgCount, gdl90.errCount, s.lat, s.lon, s.track, (s.palt * 25) - 1000, (int) (s.alt * 3.321), 
+					vvel, s.hvel);	
+						
+			}
+		}
+	}
 	canSerial = udpCanOut = (isrData.mode == 6);
 }
+
+
+#ifdef UBUNTU
+
+
+void ESP32sim_setDebug(char const *) {}
+void ESP32sim_parseArg(char **&a, char **endA) {}
+
+ifstream gdl90file; 
+
+void ESP32sim_setup() {
+	gdl90file = ifstream("./udp4000.dat", ios_base::in | ios_base::binary);
+}
+int last_us = 0;
+
+class IntervalTimer {
+public: 
+	double last, interval;
+	IntervalTimer(double i) : interval(i) {}
+	bool tick(double now) {
+		bool rval = (floor(now / interval) != floor(last / interval));
+		last = now;
+		return rval;
+	}
+};
+				
+IntervalTimer hz100(100/*msec*/);
+
+void ESP32sim_loop() {
+	if (hz100.tick(millis())) {
+		std::vector<unsigned char> data(300);
+		gdl90file.read((char *)data.data(), data.size());	
+		int n = gdl90file.gcount();
+		if (gdl90file && n > 0) { 
+			ESP32sim_udpInput(4000, data);
+		}
+	}		
+}  
+
+void ESP32sim_done() {} 
+void ESP32sim_JDisplay_forceUpdate() {}
+#endif
