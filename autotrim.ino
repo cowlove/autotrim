@@ -47,6 +47,8 @@ GDL90Parser gdl90;
 GDL90Parser::State state;
 
 
+float g5KnobValues[6];
+
 namespace Display {
 	JDisplay jd;
 	int y = 0;
@@ -392,6 +394,8 @@ void canParse(int id, int len, int timestamp, const char *ibuf) {
 			isrData.knobVal = knobVal;
 			isrData.knobSel = knobSel;
 			sendUdpCan("KSEL=%d KVAL=%f\n", knobSel, knobVal);
+			if (knobSel > 0 && knobSel < sizeof(g5KnobValues)/sizeof(g5KnobValues[0]))
+				g5KnobValues[knobSel] = knobVal;
 		} catch(...) {
 			isrData.knobSel = isrData.knobVal = 0;
 			isrData.exceptions++; 
@@ -513,6 +517,150 @@ void setup() {
 	can.begin();
 }
 
+struct LatLon {
+	LatLon(double la, double lo) : lat(la), lon(lo) {}
+	LatLon() {} 
+	double lat;
+	double lon; 
+	LatLon toRadians() { 
+		return LatLon(lat * M_PI/180, lon * M_PI/180); 
+	} 
+	LatLon toDegrees() { 
+		return LatLon(lat * 180/M_PI, lon *180/M_PI); 
+	} 
+};
+
+double bearing(LatLon a, LatLon b) { // returns relative brg in degrees
+	a = a.toRadians();
+	b = b.toRadians();
+	double dL = b.lon - a.lon;
+	double x = cos(b.lat) * sin(dL);
+	double y = cos(a.lat) * sin(b.lat) - sin(a.lat) * 	cos(b.lat)* cos(dL);	
+	double brg = atan2(x, y) * 180/M_PI;
+	if (brg < 0) brg += 360;
+	return brg;
+}
+	
+double distance(LatLon p1, LatLon p2) { // returns distance in meters 
+	p1 = p1.toRadians();
+	p2 = p2.toRadians();
+
+	const double R = 6371e3; // metres
+	double dlat = p2.lat - p1.lat;
+	double dlon = p2.lon - p1.lon;
+	
+	double a = sin(dlat/2) * sin(dlat/2) +
+          cos(p1.lat) * cos(p2.lat) *
+          sin(dlon/2) * sin(dlon/2);
+	double c = 2 * atan2(sqrt(a), sqrt(1-a));
+	return c * R;
+}
+
+LatLon locationBearingDistance(LatLon p, double brng, double d) { 
+	p = p.toRadians();
+	brng *= M_PI/180;
+
+	LatLon p2;
+	const double R = 6371e3; // metres
+	p2.lat = asin(sin(p.lat) * cos(d/R) + cos(p.lat) * sin(d/R) * cos(brng));
+		
+	p2.lon = p.lon + 
+				atan2(sin(brng) * sin(d/R) * cos(p.lat),
+					cos(d/R) - sin(p.lat) * sin(p2.lat));
+
+	return p2.toDegrees();
+}
+
+double glideslope(float distance, float alt1, float alt2) { 
+		return atan2(alt1 - alt2, distance) * 180/M_PI; 
+}
+
+bool ESP32sim_makeKml = false;
+
+class IlsSimulator {
+	const LatLon tdzLocation; // lat/long of touchdown point 
+	const float tdze;  // TDZE elevation of runway 
+	const float faCrs; // final approach course
+	const float gs; // glideslope in degrees
+	float currentAlt;
+	LatLon currentLoc;
+public:
+	IlsSimulator(LatLon l, float elev, float crs, float g) : tdzLocation(l), tdze(elev), faCrs(crs), gs(g) {}
+	void setCurrentLocation(LatLon now, double alt) { 
+		currentLoc = now;
+		currentAlt = alt;
+	}
+	double glideSlopeError() {
+		return glideslope(distance(currentLoc, tdzLocation), currentAlt, tdze) - gs;
+	}
+	double courseErr() { 
+		return faCrs - bearing(currentLoc, tdzLocation);
+	}
+	double cdiPercent() { 
+		return max(-1.0, min(1.0, courseErr() / 2.5));
+	}
+	double gsPercent() { 
+		return max(-1.0, min(1.0, glideSlopeError() / 0.7));
+	}
+} *ils = NULL;
+
+struct  Approach{
+	const char *name;
+	double lat, lon, fac, tdze, gs;
+};
+
+Approach approaches[] = {
+	{"KBFI 14R", 47.537899991260836, -122.30912681366567, 135.0, 18, 3.00}, 
+	{"KBFI 32L", 47.5214519351543, -122.29521847198963, 135.0-180, 18, 3.00}, 
+	{"S43 15", 47.90660383843286, -122.10299154204903, 165.2-15.5, 22, 4.00},
+	{"S43 33", 47.90250761678649, -122.10136258707182, 328, 22, 4.00},
+	{"2S1 17", 47.46106431485166, -122.47652028295599, 170, 300, 4.00}, 
+	{"2S1 35", 47.45619317486062, -122.47745151953475, 350, 300, 4.00}, 
+};
+	
+	
+float angularDiff(float a, float b) { 
+	float d = a - b;
+	if (d > +180) d = 360 - d;
+	if (d < -180) d = d + 360;
+	return d;
+}
+
+float magToTrue(float ang) { 
+	return ang + 15.5;		;
+}
+
+float trueToMag(float ang) { 
+	return ang - 15.5;		;
+}
+
+Approach *findBestApproach(LatLon p) { 
+	Approach *best = NULL;
+	for(int n = 0; n < sizeof(approaches)/sizeof(approaches[0]); n++) {
+		Approach &a = approaches[n];
+		LatLon tdz = LatLon(a.lat, a.lon); 
+		float brg = bearing(p, LatLon(a.lat, a.lon));
+		float dist = distance(p, tdz);
+		if (abs(angularDiff(brg, a.fac)) >= 60 || dist > 20000)
+			continue;
+		if (best == NULL || 
+			distance(p, tdz) < distance(p, LatLon(best->lat, best->lon)))
+			best = &approaches[n]; 
+	}
+#ifdef UBUNTU
+	if (best != NULL) { 
+		printf("Chose '%s', bearing %.1f, dist %.1f\n", best->name, 
+			bearing(p, LatLon(best->lat, best->lon)), distance(p, LatLon(best->lat, best->lon)));
+	} else { 
+		printf("No best approach?\n");
+	}
+#endif
+	return best;
+}
+
+
+
+GDL90Parser::State currentState;
 
 void loop() {
 	uint64_t now = micros();
@@ -553,7 +701,7 @@ void loop() {
 		//	trimPosAvg.average(), startTrimPos, lastCmdMs, digitalRead(pp[0].pin), digitalRead(pp[1].pin));
 		sendCanData();
 			}
-	if (serialReportTimer.tick()) {
+	if (0 && serialReportTimer.tick()) {
 		//sendDebugData(); 
 		fd.printf("L: %05.3f/%05.3f/%05.3f err:%d can:%d drop:%d\n", loopTimeAvg.average()/1000.0, loopTimeAvg.min()/1000.0, loopTimeAvg.max()/1000.0, 
 			isrData.udpErrs, can.pktCount, can.dropped);
@@ -587,7 +735,7 @@ void loop() {
 				udp.endPacket();
 			}
 		}
-	}
+	}	
 	
 	int avail;
 	if ((avail = udp.parsePacket()) > 0) {
@@ -641,17 +789,6 @@ void loop() {
 	if (millis() > startupPeriod)
 		startupPeriod = 0;
 
-	static double hd = 0, vd = 0;
-	static EggTimer g5Timer(100);
-	if (g5Timer.tick() && (debugMoveNeedles || isrData.mode == 5 || startupPeriod > 0)) { 
-		hd += .1;
-		vd += .15;
-		if (hd > 2) hd = -2;
-		if (vd > 2) vd = -2;
-		if (millis() - isrData.timestamp > 1000) 
-			hd = vd = -2;
-		sl30.setCDI(hd, vd);
-	}
 	
 	if (sl30Heartbeat.tick()) {
 		if (0) { 
@@ -688,6 +825,8 @@ void loop() {
 		sl30.pmrrv("301234E"); // send arbitary NAV software version packet as heartbeat
 	}
 	
+	static double hd = 0, vd = 0; // cdi deflections 
+
 	avail = udpG90.parsePacket();
 	while(avail > 0) {
 		unsigned char buf[1024]; 
@@ -699,14 +838,73 @@ void loop() {
 			gdl90.add(buf[i]);
 			GDL90Parser::State s = gdl90.getState();
 			if (s.valid && s.updated) {
+				currentState = s;
+				if (ESP32sim_makeKml) {
+					printf("%f,%f\n", s.lat, s.lon);
+				}
+
 				int vvel = (signed short)(s.vvel * 64);
-				Serial.printf("GDL90 packets %d errors %d  lat %f, lon %f, track %f, palt %d, galt %d, vvel %d, hvel %d\n", 
-					gdl90.msgCount, gdl90.errCount, s.lat, s.lon, s.track, (s.palt * 25) - 1000, (int) (s.alt * 3.321), 
-					vvel, s.hvel);	
+				static const LatLon target(47.90558443637955, -122.10252512643517);
+				LatLon here(s.lat, s.lon);
+				float brg = bearing(here, target);
+				float range = distance(here, target);
+				Serial.printf("%08d pos %+11.6f,%+11.6f track %6.1f, brg %6.1f range %5.0f palt %5d, galt %5d, vvel %+4d, hvel %3d CDI:%+.1f GS:%+.1f\n", 
+						(int)millis(), s.lat, s.lon, s.track, brg, range, (s.palt * 25) - 1000, (int) (s.alt * 3.321), 
+					vvel, s.hvel, hd, vd);	
 						
 			}
 		}
 	}
+	
+	static EggTimer g5Timer(100);
+#ifdef UBUNTU
+	if (millis() >276000) {
+		isrData.mode = 5;
+		g5KnobValues[2] = 200;
+		g5KnobValues[4] = 10 * M_PI/180;
+	}
+#endif
+
+	if (g5Timer.tick()) { 
+		if (debugMoveNeedles || isrData.mode == 6 || startupPeriod > 0) { 
+			hd += .1;
+			vd += .15;
+			if (hd > 2) hd = -2;
+			if (vd > 2) vd = -2;
+			if (millis() - isrData.timestamp > 1000) 
+				hd = vd = -2;
+			sl30.setCDI(hd, vd);
+		}
+		if (isrData.mode == 5) {
+			LatLon now(currentState.lat, currentState.lon); 
+			if (ils == NULL) {
+				float vlocTrk = g5KnobValues[4] * 180/M_PI;
+				float altBug = g5KnobValues[2];
+				if (vlocTrk != 0) { 
+					const float gs = 3.0;
+					float tdze = altBug - 200 / 3.281;
+					LatLon facIntercept = locationBearingDistance(now, currentState.track, 1000);
+					float facDist = (currentState.alt - tdze) / tan(gs * M_PI/180);
+					LatLon tdz = locationBearingDistance(facIntercept, magToTrue(vlocTrk), facDist);
+					ils = new IlsSimulator(tdz, tdze, magToTrue(vlocTrk), gs);
+					printf("Set ILS\n");
+				} else { 
+					Approach *a = findBestApproach(now);
+					if (a != NULL)
+						ils = new IlsSimulator(LatLon(a->lat, a->lon), a->tdze / 3.281, magToTrue(a->fac), a->gs);
+				}
+			}
+			ils->setCurrentLocation(now, currentState.alt);
+			hd = ils->cdiPercent() * 2.0;
+			vd = ils->gsPercent() * 2.0;
+			sl30.setCDI(hd, vd);
+		} else if (ils != NULL) {
+			delete ils;
+			ils = NULL;
+		}
+	}
+
+
 	canSerial = udpCanOut = (isrData.mode == 6);
 }
 
@@ -715,14 +913,20 @@ void loop() {
 
 
 void ESP32sim_setDebug(char const *) {}
-void ESP32sim_parseArg(char **&a, char **endA) {}
+void ESP32sim_parseArg(char **&a, char **endA) {
+	if (strcmp(*a, "--kml") == 0) ESP32sim_makeKml = true;
+}
 
 ifstream gdl90file; 
 
+
 void ESP32sim_setup() {
+	if (ESP32sim_makeKml) 
+		printf("<Placemark><name>Untitled Path</name><LineString><tessellate>1</tessellate><altitudeMode>relativeToGround</altitudeMode><coordinates>\n");
 	gdl90file = ifstream("./udp4000.dat", ios_base::in | ios_base::binary);
+	gdl90file.seekg(2500000);
 }
-int last_us = 0;
+int last_us = 0;	
 
 class IntervalTimer {
 public: 
@@ -748,6 +952,9 @@ void ESP32sim_loop() {
 	}		
 }  
 
-void ESP32sim_done() {} 
-void ESP32sim_JDisplay_forceUpdate() {}
+void ESP32sim_done() {
+	if (ESP32sim_makeKml) 
+		printf("</coordinates></LineString></Placemark>");
+} 
+void ESP32sim_JDisplay_forceUpdate	() {}
 #endif
