@@ -147,16 +147,18 @@ static bool first = true;
 
 // send udp packet multiple times on broadcast address and all addresses in normal EchoUAT wifi range 
 void superSend(const char *b) { 
-   for (int repeat = 0; repeat < 2; repeat++) { 
+   for (int repeat = 0; repeat < 1; repeat++) { 
 		udp.beginPacket("255.255.255.255", 7891);
 		udp.write((uint8_t *)b, strlen(b));
 		udp.endPacket();
-		for (int n = 100; n < 103; n++) { 
+		for (int n = 100; n < 103; n++) {
+			if (WiFi.localIP()[3] != n) { 
 				char ip[32];
 				snprintf(ip, sizeof(ip), "192.168.4.%d", n);
 				udp.beginPacket(ip, 7891);
 				udp.write((const uint8_t *)b, strlen(b));
 				udp.endPacket();
+			}
 		}
 	}
 }
@@ -172,6 +174,12 @@ struct {
 	int udpErrs;
 } isrData;
 
+class ScopedUnlockMutex {
+	Mutex &mut;
+public:
+	ScopedUnlockMutex(Mutex &m) : mut(m) { mut.unlock(); }
+	~ScopedUnlockMutex() { mut.lock(); }
+}; 
 
 class CanWrapper {
 	Mutex canMutex;
@@ -183,13 +191,14 @@ class CanWrapper {
 		int maxLen;
 	};
 
-	CircularBoundedQueue<CanPacket> pktQueue = CircularBoundedQueue<CanPacket>(256);
+	CircularBoundedQueue<CanPacket> pktQueue = CircularBoundedQueue<CanPacket>(2048);
 	char ibuf[1024];
 	int mpSize = 0, lastId = 0;
 	//void onCanPacket(int id, int len, int timestamp, const char *buf) {}
 	void (*onCanPacket)(int, int, int, const char *) = NULL;
 	
 public:
+	int getQueueLen() { return pktQueue.getCount(); } 
 	int isrCount = 0, pktCount = 0, dropped = 0;
 	void onReceive(	void (*f)(int, int, int, const char *)){ onCanPacket = f; }
 	
@@ -209,21 +218,24 @@ public:
 		CAN.end();
 	}
 	void reset() { CAN.filter(0,0); }
-	void run(int timeout) { 
-		CanPacket *pkt;
-		while((pkt = pktQueue.peekTail(timeout)) != NULL) { 
-			static char obuf[1024];
-			if (pkt->id != lastId || mpSize >= sizeof(ibuf)) {
-				pktCount++;
-				if (onCanPacket != NULL) 
-					onCanPacket(lastId, mpSize, pkt->timestamp, ibuf);
-				mpSize = 0;
-				lastId = pkt->id;
-			}
-			for(int n = 0; n < pkt->len && mpSize < sizeof(ibuf); n++) {
-				ibuf[mpSize++] = pkt->buf[n];
-			}
+	void run(int timeout, int maxPkts = -1) { 
+		CanPacket *p;
+		while(maxPkts != 0 && (p = pktQueue.peekTail(timeout)) != NULL) { 
+			CanPacket cp = *p;
 			pktQueue.freeTail();
+			if (maxPkts > 0) 
+				maxPkts--;
+			if (cp.id != lastId || mpSize >= sizeof(ibuf)) {
+				pktCount++;
+				if (onCanPacket != NULL) {
+					onCanPacket(lastId, mpSize, cp.timestamp, ibuf);
+				}
+				mpSize = 0;
+				lastId = cp.id;
+			}
+			for(int n = 0; n < cp.len && mpSize < sizeof(ibuf); n++) {
+				ibuf[mpSize++] = cp.buf[n];
+			}
 		}
 	}
 	void isr(int packetSize) {
@@ -566,11 +578,9 @@ LatLon locationBearingDistance(LatLon p, double brng, double d) {
 	LatLon p2;
 	const double R = 6371e3; // metres
 	p2.lat = asin(sin(p.lat) * cos(d/R) + cos(p.lat) * sin(d/R) * cos(brng));
-		
 	p2.lon = p.lon + 
 				atan2(sin(brng) * sin(d/R) * cos(p.lat),
 					cos(d/R) - sin(p.lat) * sin(p2.lat));
-
 	return p2.toDegrees();
 }
 
@@ -597,7 +607,7 @@ public:
 		return glideslope(distance(currentLoc, tdzLocation), currentAlt, tdze) - gs;
 	}
 	double courseErr() { 
-		return faCrs - bearing(currentLoc, tdzLocation);
+		return bearing(currentLoc, tdzLocation) - faCrs;
 	}
 	double cdiPercent() { 
 		return max(-1.0, min(1.0, courseErr() / 2.5));
@@ -660,14 +670,12 @@ Approach *findBestApproach(LatLon p) {
 			distance(p, tdz) < distance(p, LatLon(best->lat, best->lon)))
 			best = &approaches[n]; 
 	}
-#ifdef UBUNTU
 	if (best != NULL) { 
-		printf("Chose '%s', bearing %.1f, dist %.1f\n", best->name, 
+		Serial.printf("Chose '%s', bearing %.1f, dist %.1f\n", best->name, 
 			bearing(p, LatLon(best->lat, best->lon)), distance(p, LatLon(best->lat, best->lon)));
 	} else { 
-		printf("No best approach?\n");
+		Serial.printf("No best approach?\n");
 	}
-#endif
 	return best;
 }
 
@@ -694,7 +702,7 @@ void loop() {
 		pp[0].pulse(1, 1000);
 		pp[1].pulse(1, 2000);
 	} 
-	can.run(pdMS_TO_TICKS(5));
+	can.run(pdMS_TO_TICKS(5), 20);
 	
 	if (lastLoopTime != -1) 
 		loopTimeAvg.add(now - lastLoopTime);
@@ -723,16 +731,16 @@ void loop() {
 	trimPosAvg.add(analogRead(33));
 	if (pinReportTimer.tick()/* || isrData.forceSend*/) { 
 		isrData.forceSend = false;
-		//Serial.printf("p%d %d %.2f %.2f m %d pins %d %d\n", lastCmdPin,  (int)(micros() - lastCmdTime), 
-		//	trimPosAvg.average(), startTrimPos, lastCmdMs, digitalRead(pp[0].pin), digitalRead(pp[1].pin));
+		//Serial.printf("%08d %d\n", (int)millis(), isrData.mode);
 		sendCanData();
-			}
-	if (0 && serialReportTimer.tick()) {
-		//sendDebugData(); 
-		fd.printf("L: %05.3f/%05.3f/%05.3f err:%d can:%d drop:%d\n", loopTimeAvg.average()/1000.0, loopTimeAvg.min()/1000.0, loopTimeAvg.max()/1000.0, 
-			isrData.udpErrs, can.pktCount, can.dropped);
-		Serial.printf("%06.2f L: %05.3f/%05.3f/%05.3f err:%d can:%d drop:%d\n", millis() / 1000.0, loopTimeAvg.average()/1000.0, loopTimeAvg.min()/1000.0, loopTimeAvg.max()/1000.0, 
-			isrData.udpErrs, can.pktCount, can.dropped);
+	}
+	if (1 && serialReportTimer.tick()) {
+		//sendDebugData();
+		char buf[256]; 
+		snprintf(buf, sizeof(buf), "L: %05.3f/%05.3f/%05.3f m:%d err:%d can:%d drop:%d qlen:%d\n", loopTimeAvg.average()/1000.0, loopTimeAvg.min()/1000.0, loopTimeAvg.max()/1000.0, 
+			isrData.mode, isrData.udpErrs, can.pktCount, can.dropped, can.getQueueLen());
+		Serial.print(buf);
+		fd.print(buf);
 	}
 
 	if (millis() > nextCmdTime && setPoint != -1) { 
@@ -853,13 +861,10 @@ void loop() {
 	
 
 	avail = udpG90.parsePacket();
-	while(avail > 0) {
+	if (avail > 0) {
 		//Serial.printf("UDP: %d bytes avail\n", avail);
 		unsigned char buf[1024]; 
 		int recsize = udpG90.read(buf, min(avail,(int)sizeof(buf)));
-		if (recsize <= 0)
-				break;
-		avail -= recsize;
 		for (int i = 0; i < recsize; i++) {  
 			gdl90.add(buf[i]);
 			GDL90Parser::State s = gdl90.getState();
@@ -890,9 +895,10 @@ void loop() {
 			fd.write(obuf, strlen(obuf));
 			if (sdCardFlush.tick()) 
 				fd.flush();
+			//Serial.printf("%08d ", millis());	
+			//Serial.print(obuf);	
+
 		}
-		//Serial.printf("%08d ", millis());	
-		//Serial.print(obuf);	
 	}
 	
 	static EggTimer g5Timer(100);
@@ -906,8 +912,8 @@ void loop() {
 
 	if (g5Timer.tick()) { 
 		if (debugMoveNeedles || isrData.mode == 6 || startupPeriod > 0) { 
-			hd += .1;
-			vd += .15;
+			hd += .05;
+			vd += .075;
 			if (hd > 2) hd = -2;
 			if (vd > 2) vd = -2;
 			if (millis() - isrData.timestamp > 1000) 
@@ -945,8 +951,8 @@ void loop() {
 		}
 	}
 
-	canSerial = udpCanOut = (isrData.mode == 6);
-	delay(2);
+	canSerial = udpCanOut = (isrData.mode == 7);
+	delayMicroseconds(1);
 }
 
 

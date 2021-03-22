@@ -17,7 +17,7 @@ cat:	fixtty
 	cat ${UPLOAD_PORT}
 
 backtrace:
-	tr ' ' '\n' | /home/jim/.arduino15/packages/esp32/tools/xtensa-esp32-elf-gcc/1.22.0-80-g6c4433a-5.2.0/bin/xtensa-esp32-elf-addr2line -f -i -e $(BUILD_DIR)/*.elf
+	tr ' ' '\n' | /home/jim/.arduino15/packages/esp32/tools/xtensa-esp32-elf-gcc/*/bin/xtensa-esp32-elf-addr2line -f -i -e $(BUILD_DIR)/*.elf
 
 
 autotrim_ubuntu:	autotrim.ino ESP32sim_ubuntu.h jimlib.h G90Parser.h PidControl.h
