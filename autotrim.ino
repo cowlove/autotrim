@@ -622,8 +622,8 @@ Approach approaches[] = {
 	
 float angularDiff(float a, float b) { 
 	float d = a - b;
-	if (d > +180) d = 360 - d;
-	if (d < -180) d = d + 360;
+	if (d > +180) d -= 360;
+	if (d < -180) d += 360;
 	return d;
 }
 
@@ -822,7 +822,7 @@ void loop() {
 			// hdg bug change
 			//e465011fc92940
 			//e4650113e72a40
-		}
+		}	
 		sl30.pmrrv("301234E"); // send arbitary NAV software version packet as heartbeat
 	}
 	
@@ -855,6 +855,16 @@ void loop() {
 						
 			}
 		}
+		char obuf[1024];
+		sprintf(obuf, "%s", "GDL90:");
+		int maxB = min((int)(sizeof(obuf) - 8)/2, recsize);
+		for (int i = 0; i < maxB; i++) { 
+			sprintf(obuf + 6 + i * 2, "%02x", buf[i]);
+		}
+		sprintf(obuf + 6 + maxB * 2, "\n");
+		fd.write(obuf, strlen(obuf));
+		Serial.printf("%08d ", millis());	
+		Serial.println(obuf);	
 	}
 	
 	static EggTimer g5Timer(100);
@@ -895,10 +905,12 @@ void loop() {
 						ils = new IlsSimulator(LatLon(a->lat, a->lon), a->tdze / 3.281, magToTrue(a->fac), a->gs);
 				}
 			}
-			ils->setCurrentLocation(now, currentState.alt);
-			hd = ils->cdiPercent() * 2.0;
-			vd = ils->gsPercent() * 2.0;
-			sl30.setCDI(hd, vd);
+			if (ils != NULL) { 
+				ils->setCurrentLocation(now, currentState.alt);
+				hd = ils->cdiPercent() * 2.0;
+				vd = ils->gsPercent() * 2.0;
+				sl30.setCDI(hd, vd);
+			}
 		} else if (ils != NULL) {
 			delete ils;
 			ils = NULL;
@@ -912,20 +924,32 @@ void loop() {
 
 #ifdef UBUNTU
 
+ifstream gdl90file; 
 
 void ESP32sim_setDebug(char const *) {}
 void ESP32sim_parseArg(char **&a, char **endA) {
 	if (strcmp(*a, "--kml") == 0) ESP32sim_makeKml = true;
+	if (strcmp(*a, "--gdltest") == 0) {
+		ifstream f = ifstream(*(++a), ios_base::in | ios_base::binary);
+		while(f) { 
+			gdl90.add(f.get());
+		}
+		ESP32sim_done();
+		exit(0);
+	}
+	if (strcmp(*a, "--gdl") == 0) {
+		gdl90file = ifstream(*(++a), ios_base::in | ios_base::binary);
+	}
+	if (strcmp(*a, "--gdlseek") == 0) {
+		int pos = 0;
+		sscanf(*(++a), "%d", &pos);
+		gdl90file.seekg(pos);
+	}
 }
-
-ifstream gdl90file; 
-
 
 void ESP32sim_setup() {
 	if (ESP32sim_makeKml) 
 		printf("<Placemark><name>Untitled Path</name><LineString><tessellate>1</tessellate><altitudeMode>relativeToGround</altitudeMode><coordinates>\n");
-	gdl90file = ifstream("./udp4000.dat", ios_base::in | ios_base::binary);
-	gdl90file.seekg(2500000);
 }
 int last_us = 0;	
 
@@ -943,7 +967,7 @@ public:
 IntervalTimer hz100(100/*msec*/);
 
 void ESP32sim_loop() {
-	if (hz100.tick(millis())) {
+	if (hz100.tick(millis()) && gdl90file) {
 		std::vector<unsigned char> data(300);
 		gdl90file.read((char *)data.data(), data.size());	
 		int n = gdl90file.gcount();
@@ -952,10 +976,11 @@ void ESP32sim_loop() {
 		}
 	}		
 }  
-
+	
 void ESP32sim_done() {
 	if (ESP32sim_makeKml) 
 		printf("</coordinates></LineString></Placemark>");
+	printf("gdl90 msgs %d errors %d\n", gdl90.msgCount, gdl90.errCount);
 } 
 void ESP32sim_JDisplay_forceUpdate	() {}
 #endif
