@@ -490,14 +490,14 @@ void setup() {
 	while (digitalRead(pins.button) != 0 && WiFi.status() != WL_CONNECTED) {
 		wifi.run();
 		delay(10);
-		if (millis() - startms > 21000)
-						break;
 	}
 
 	digitalWrite(LED_PIN, 1);
 
 	if (WiFi.status() == WL_CONNECTED) {
+		Serial.printf("connected\n");
 		udp.begin(udpPortIn);
+		udpG90.begin(4000);
 		ArduinoOTA.begin();
 		ArduinoOTA.onStart([]() {
 			esp_task_wdt_delete(NULL);
@@ -506,9 +506,7 @@ void setup() {
 			otaInProgress = true;
 		});
 		openLogFile("CAN%03d.TXT");
-	}
-	
-	udpG90.begin(4000);
+	} 
 	
 	adcAttachPin(pins.ADC);
 	//analogSetCycles(255);
@@ -672,6 +670,7 @@ Approach *findBestApproach(LatLon p) {
 
 GDL90Parser::State currentState;
 
+static EggTimer report(2000);
 void loop() {
 	uint64_t now = micros();
 	esp_task_wdt_reset();
@@ -699,6 +698,18 @@ void loop() {
 	if (canResetTimer.tick()) {
 		can.reset();
 	}
+	
+	if (report.tick()) { 
+		WiFiUDP &udp = udpG90;
+		udp.beginPacket("255.255.255.255", 9000);
+		char b[128];
+		snprintf(b, sizeof(b), "%d %s    " __BASE_FILE__ "   " __DATE__ "   " __TIME__ "   0x%08x\n", 
+				(int)(millis() / 1000), WiFi.localIP().toString().c_str(), /*(int)ESP.getEfuseMac()*/0);
+		udp.write((const uint8_t *)b, strlen(b));
+		udp.endPacket();
+	}
+                        
+
 	
 	for (int n =0; n < sizeof(pp)/sizeof(pp[0]); n++) { 
 		pp[n].run();
@@ -838,6 +849,7 @@ void loop() {
 
 	avail = udpG90.parsePacket();
 	while(avail > 0) {
+		//Serial.printf("UDP: %d bytes avail\n", avail);
 		unsigned char buf[1024]; 
 		int recsize = udpG90.read(buf, min(avail,(int)sizeof(buf)));
 		if (recsize <= 0)
@@ -859,18 +871,21 @@ void loop() {
 				float range = distance(here, target);
 				Serial.printf("%08d pos %+11.6f,%+11.6f track %6.1f, brg %6.1f range %5.0f palt %5d, galt %5d, vvel %+4d, hvel %3d CDI:%+.1f GS:%+.1f\n", 
 						(int)millis(), s.lat, s.lon, s.track, brg, range, (s.palt * 25) - 1000, (int) (s.alt * 3.321), 
-					vvel, s.hvel, hd, vd);	
-						
+					vvel, s.hvel, hd, vd);		
 			}
 		}
-		char obuf[1024];
-		sprintf(obuf, "%s", "GDL90:");
-		int maxB = min((int)(sizeof(obuf) - 8)/2, recsize);
-		for (int i = 0; i < maxB; i++) { 
-			sprintf(obuf + 6 + i * 2, "%02x", buf[i]);
+		if (fd == true) { 
+			char obuf[1024];
+			sprintf(obuf, "%s", "GDL90:");
+			int maxB = min((int)(sizeof(obuf) - 8)/2, recsize);
+			for (int i = 0; i < maxB; i++) { 
+				sprintf(obuf + 6 + i * 2, "%02x", buf[i]);
+			}
+			sprintf(obuf + 6 + maxB * 2, "\n");
+			fd.write(obuf, strlen(obuf));
+			if (sdCardFlush.tick()) 
+				fd.flush();
 		}
-		sprintf(obuf + 6 + maxB * 2, "\n");
-		fd.write(obuf, strlen(obuf));
 		//Serial.printf("%08d ", millis());	
 		//Serial.print(obuf);	
 	}
@@ -925,8 +940,8 @@ void loop() {
 		}
 	}
 
-
 	canSerial = udpCanOut = (isrData.mode == 6);
+	delay(2);
 }
 
 

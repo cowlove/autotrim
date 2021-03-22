@@ -24,3 +24,6 @@ autotrim_ubuntu:	autotrim.ino ESP32sim_ubuntu.h jimlib.h G90Parser.h PidControl.
 	g++  -x c++ -g $< -o $@ -DESP32 -DUBUNTU -I./ 
 # add -pg to profile 
 	
+
+socat:	
+	socat udp-recv:9000 - 
