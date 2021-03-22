@@ -7,7 +7,7 @@
 
 
 #ifndef UBUNTU
-#include "Update.h"				
+#include <Update.h>			
 #include "WebServer.h"
 #include "DNSServer.h"
 #include "ESPmDNS.h"
@@ -38,6 +38,7 @@ WiFiMulti wifi;
 #include <sstream>
 #include <vector>
 #include <iterator>
+#include <istream>
 #include "jimlib.h"
 
 #include "G90Parser.h"
@@ -47,7 +48,8 @@ GDL90Parser gdl90;
 GDL90Parser::State state;
 
 
-float g5KnobValues[6];
+static float g5KnobValues[6];
+static double hd = 0, vd = 0; // cdi deflections 
 
 namespace Display {
 	JDisplay jd;
@@ -635,6 +637,15 @@ float trueToMag(float ang) {
 	return ang - 15.5;		;
 }
 
+struct LatLonAlt { 
+	LatLon loc;
+	float alt; // meters 
+	bool valid;
+	LatLonAlt() : valid(false) {}
+	LatLonAlt(LatLon l, float a) : loc(l), alt(a), valid(true) {}
+	LatLonAlt(double lat, double lon, float a) : loc(lat, lon), alt(a), valid(true) {};
+};
+
 Approach *findBestApproach(LatLon p) { 
 	Approach *best = NULL;
 	for(int n = 0; n < sizeof(approaches)/sizeof(approaches[0]); n++) {
@@ -658,8 +669,6 @@ Approach *findBestApproach(LatLon p) {
 #endif
 	return best;
 }
-
-
 
 GDL90Parser::State currentState;
 
@@ -826,7 +835,6 @@ void loop() {
 		sl30.pmrrv("301234E"); // send arbitary NAV software version packet as heartbeat
 	}
 	
-	static double hd = 0, vd = 0; // cdi deflections 
 
 	avail = udpG90.parsePacket();
 	while(avail > 0) {
@@ -863,8 +871,8 @@ void loop() {
 		}
 		sprintf(obuf + 6 + maxB * 2, "\n");
 		fd.write(obuf, strlen(obuf));
-		Serial.printf("%08d ", millis());	
-		Serial.println(obuf);	
+		//Serial.printf("%08d ", millis());	
+		//Serial.print(obuf);	
 	}
 	
 	static EggTimer g5Timer(100);
@@ -923,8 +931,87 @@ void loop() {
 
 
 #ifdef UBUNTU
+////////////////////////////////////////////////////////////////////////////////////////
+// the rest of the file is simulation support code 
+
+
+class TrackSimulator {
+  public: 
+	LatLonAlt curPos;
+	int wayPointCount = 0;
+	LatLonAlt activeWaypoint;
+	bool waypointPassed;
+	float speed; // knots 
+	float vvel;  // fpm
+	float track;
+	float hWiggle = 0, vWiggle = 0; // add simulated hdg/alt variability
+	void run(float sec) { 
+		float distToWaypoint = 0;
+		if (!curPos.valid)
+			return;
+		if (activeWaypoint.valid) {
+			track = bearing(curPos.loc, activeWaypoint.loc) + hWiggle;
+			distToWaypoint = distance(curPos.loc, activeWaypoint.loc);
+		}
+		float dist = speed * .51444 * sec;
+		LatLon newPos = locationBearingDistance(curPos.loc, track, dist);
+
+		float newAlt = curPos.alt;
+		if (distToWaypoint > 0 ) 
+			newAlt += (activeWaypoint.alt - curPos.alt) * (dist / distToWaypoint) + vWiggle;
+		vvel = (newAlt - curPos.alt) / sec * 196.85; // m/s to fpm 
+		curPos = LatLonAlt(newPos, newAlt);
+		if (abs(angularDiff(track, bearing(curPos.loc, activeWaypoint.loc))) >= 90)
+			waypointPassed = true;
+	}	
+	void setWaypoint(const LatLonAlt &p) {
+		activeWaypoint = p;
+		waypointPassed = false;
+		wayPointCount++;
+		if (wayPointCount == 1) { // first waypoint, initial position
+			curPos = activeWaypoint;
+			waypointPassed = true;
+		}
+	}
+};
+
+class TrackSimFileParser { 
+	std::istream &in;
+public:
+	TrackSimulator sim;
+	float endAlt = -1;
+	TrackSimFileParser(std::istream &i) : in(i) {}
+	void run(float sec) { 
+		if (sim.activeWaypoint.valid == false || sim.waypointPassed)  
+			readNextWaypoint();
+		sim.run(sec);
+		if (sim.curPos.valid && sim.curPos.alt < endAlt) 
+			ESP32sim_done();
+	}
+	void readNextWaypoint() { 
+		double lat, lon, alt;
+		int knobSel;
+		float knobVal;
+		std::string s;
+		sim.activeWaypoint.valid = false;
+		while(sim.activeWaypoint.valid == false && std::getline(in, s)) {
+			cout << "READ LINE: " << s<< endl;
+			sscanf(s.c_str(), "SPEED=%f", &sim.speed);
+			sscanf(s.c_str(), "ENDALT=%f", &endAlt);
+			sscanf(s.c_str(), "MODE=%d", &isrData.mode);
+			if (sscanf(s.c_str(), "KNOB=%d,%f", &knobSel, &knobVal) == 2 && knobSel > 0 && knobSel < sizeof(g5KnobValues)/sizeof(g5KnobValues[0]))
+				g5KnobValues[knobSel] = knobVal; 
+			if (sscanf(s.c_str(), "%lf, %lf %lf", &lat, &lon, &alt) == 3) 
+				sim.setWaypoint(LatLonAlt(lat, lon, alt));
+			else if (sscanf(s.c_str(), "%lf, %lf", &lat, &lon) == 2) 
+				sim.setWaypoint(LatLonAlt(lat, lon, sim.activeWaypoint.alt));
+		}	
+	}
+};
 
 ifstream gdl90file; 
+ifstream trackSimFile;
+TrackSimFileParser tSim(trackSimFile);
 
 void ESP32sim_setDebug(char const *) {}
 void ESP32sim_parseArg(char **&a, char **endA) {
@@ -937,14 +1024,15 @@ void ESP32sim_parseArg(char **&a, char **endA) {
 		ESP32sim_done();
 		exit(0);
 	}
-	if (strcmp(*a, "--gdl") == 0) {
+	if (strcmp(*a, "--gdl") == 0) 
 		gdl90file = ifstream(*(++a), ios_base::in | ios_base::binary);
-	}
 	if (strcmp(*a, "--gdlseek") == 0) {
 		int pos = 0;
 		sscanf(*(++a), "%d", &pos);
 		gdl90file.seekg(pos);
 	}
+	if (strcmp(*a, "--tracksim") == 0) 
+		trackSimFile = ifstream(*(++a), ios_base::in | ios_base::binary);
 }
 
 void ESP32sim_setup() {
@@ -967,20 +1055,51 @@ public:
 IntervalTimer hz100(100/*msec*/);
 
 void ESP32sim_loop() {
-	if (hz100.tick(millis()) && gdl90file) {
+	if (!hz100.tick(millis())) 
+		return;
+		
+	if (gdl90file) {
 		std::vector<unsigned char> data(300);
 		gdl90file.read((char *)data.data(), data.size());	
 		int n = gdl90file.gcount();
 		if (gdl90file && n > 0) { 
 			ESP32sim_udpInput(4000, data);
 		}
-	}		
+	}	
+	if (trackSimFile) {
+		tSim.run(hz100.interval / 1000.0);
+		LatLonAlt p = tSim.sim.curPos;
+			GDL90Parser::State s;
+		if (p.valid) { 
+			s.lat = p.loc.lat;
+			s.lon = p.loc.lon;
+			s.alt = p.alt;
+			s.track = tSim.sim.track;
+			s.vvel = tSim.sim.vvel;
+			s.hvel = tSim.sim.speed;
+			s.palt = (p.alt + 1000) / 25;
+			
+			WiFiUDP::InputData buf;
+			buf.resize(7);
+			gdl90.packMsg11(buf.data(), s);
+			ESP32sim_udpInput(4000, buf);
+			buf.resize(32);
+			gdl90.packMsg10(buf.data(), s);
+			ESP32sim_udpInput(4000, buf);
+
+		}
+		/*printf("%3d %d %d %+4.1f %+4.1f %+11.6f, %+11.6f a:%4.0f t:%4.1f r:%4.0f\n", tSim.sim.wayPointCount, tSim.sim.waypointPassed, isrData.mode,
+			hd, vd, s.lat, s.lon, (float)s.alt, s.track, 
+			distance(p.loc, tSim.sim.activeWaypoint.loc));
+		*/
+	}	
 }  
 	
 void ESP32sim_done() {
 	if (ESP32sim_makeKml) 
 		printf("</coordinates></LineString></Placemark>");
 	printf("gdl90 msgs %d errors %d\n", gdl90.msgCount, gdl90.errCount);
+	exit(0);
 } 
 void ESP32sim_JDisplay_forceUpdate	() {}
 #endif
