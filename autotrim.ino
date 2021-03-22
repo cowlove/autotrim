@@ -51,6 +51,7 @@ GDL90Parser::State state;
 static float g5KnobValues[6];
 static double hd = 0, vd = 0; // cdi deflections 
 
+#ifdef XDISPLAY
 namespace Display {
 	JDisplay jd;
 	int y = 0;
@@ -58,7 +59,7 @@ namespace Display {
 	JDisplayItem<const char *>  ip(&jd,10,y,"WIFI:", "%s ");
 	JDisplayItem<float>  sec(&jd,10,y+=10," SEC:", "%.02f ");
 }
-
+#endif
 
 
 //std::queue<struct CanPacket> qFull;
@@ -477,10 +478,12 @@ void setup() {
 	pinMode(pins.button, INPUT_PULLUP);
 //	pinMode(3,INPUT);
 
+#ifdef XDISPLAY
 	Display::jd.begin();
 	Display::jd.clear();
 	Display::jd.forceUpdate();
-	
+#endif
+
 	wifi.addAP("Ping-582B", "");
 	wifi.addAP("Flora_2GEXT", "maynards");
 	wifi.addAP("Team America", "51a52b5354");
@@ -680,10 +683,12 @@ void loop() {
 		can.reset();
 		return;
 	}
+#ifdef XDISPLAY
 	if (displayTimer.tick()) { 
 		Display::sec = millis() / 1000.0;
 		Display::jd.update(false, false);
 	}	
+#endif
 	if (first || digitalRead(pins.button) == 0) { 
 		first = false;
 		pp[0].pulse(1, 1000);
