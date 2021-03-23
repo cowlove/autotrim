@@ -1,0 +1,21 @@
+{
+    "configurations": [
+        {
+            "name": "Linux",
+            "includePath": [
+                "${workspaceFolder}/**",
+                "${HOME}/Arduino/libraries/**",
+                "${HOME}/.arduino15/packages/esp32/hardware/esp32/**"
+            ],
+            "defines": [
+                "UBUNTU",
+                "ESP32"
+            ],
+            "compilerPath": "/usr/lib/ccache/gcc",
+            "cStandard": "gnu17",
+            "cppStandard": "gnu++14",
+            "intelliSenseMode": "linux-gcc-x64"
+        }
+    ],
+    "version": 4
+}
