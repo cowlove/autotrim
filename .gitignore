@@ -1,3 +1,5 @@
+*.jpg
+*.png
 a.out
 *.txt
 *.can

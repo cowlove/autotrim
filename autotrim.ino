@@ -46,9 +46,9 @@ WiFiUDP udpG90;
 GDL90Parser gdl90;
 GDL90Parser::State state;
 
-
+static const float FEET_PER_METER = 3.3208;
 static float g5KnobValues[6];
-static double hd = 0, vd = 0; // cdi deflections 
+static double hd = -2, vd = -2; // cdi deflections 
 
 #ifdef XDISPLAY
 namespace Display {
@@ -590,13 +590,13 @@ double glideslope(float distance, float alt1, float alt2) {
 bool ESP32sim_makeKml = false;
 
 class IlsSimulator {
+public:
 	const LatLon tdzLocation; // lat/long of touchdown point 
 	const float tdze;  // TDZE elevation of runway 
 	const float faCrs; // final approach course
 	const float gs; // glideslope in degrees
 	float currentAlt;
 	LatLon currentLoc;
-public:
 	IlsSimulator(LatLon l, float elev, float crs, float g) : tdzLocation(l), tdze(elev), faCrs(crs), gs(g) {}
 	void setCurrentLocation(LatLon now, double alt) { 
 		currentLoc = now;
@@ -862,6 +862,7 @@ void loop() {
 	avail = udpG90.parsePacket();
 	if (avail > 0) {
 		//Serial.printf("UDP: %d bytes avail\n", avail);
+				static int count = 0;
 		unsigned char buf[1024]; 
 		int recsize = udpG90.read(buf, min(avail,(int)sizeof(buf)));
 		for (int i = 0; i < recsize; i++) {  
@@ -874,12 +875,13 @@ void loop() {
 				}
 
 				int vvel = (signed short)(s.vvel * 64);
-				static const LatLon target(47.90558443637955, -122.10252512643517);
+				LatLon target = (ils != NULL) ? ils->tdzLocation : LatLon(47.90558443637955, -122.10252512643517);
 				LatLon here(s.lat, s.lon);
 				float brg = bearing(here, target);
 				float range = distance(here, target);
-				Serial.printf("%08d pos %+11.6f,%+11.6f track %6.1f, brg %6.1f range %5.0f palt %5d, galt %5d, vvel %+4d, hvel %3d CDI:%+.1f GS:%+.1f\n", 
-						(int)millis(), s.lat, s.lon, s.track, brg, range, (s.palt * 25) - 1000, (int) (s.alt * 3.321), 
+				count++;
+				Serial.printf("%08.2f pos %+11.6f %+11.6f track %6.1f, brg %6.1f range %5.0f palt %5d, galt %5d, vvel %+4d, hvel %3d CDI:%+.1f GS:%+.1f\n", 
+						millis()/1000.0, s.lat, s.lon, s.track, brg, range, (s.palt * 25) - 1000, (int) (s.alt * FEET_PER_METER), 
 					vvel, s.hvel, hd, vd);		
 			}
 		}
@@ -901,15 +903,9 @@ void loop() {
 	}
 	
 	static EggTimer g5Timer(100);
-#ifdef UBUNTU
-	if (millis() >276000) {
-		isrData.mode = 5;
-		g5KnobValues[2] = 200;
-		g5KnobValues[4] = 10 * M_PI/180;
-	}
-#endif
 
 	if (g5Timer.tick()) { 
+#ifndef UBUNTU
 		if (debugMoveNeedles || isrData.mode == 6 || startupPeriod > 0) { 
 			hd += .05;
 			vd += .075;
@@ -919,6 +915,7 @@ void loop() {
 				hd = vd = -2;
 			sl30.setCDI(hd, vd);
 		}
+#endif
 		if (isrData.mode == 5) {
 			LatLon now(currentState.lat, currentState.lon); 
 			if (ils == NULL) {
@@ -927,7 +924,7 @@ void loop() {
 				if (vlocTrk != 0) { 
 					const float gs = 3.0;
 					float tdze = altBug - 200 / 3.281;
-					LatLon facIntercept = locationBearingDistance(now, currentState.track, 1000);
+					LatLon facIntercept = locationBearingDistance(now, currentState.track, 3000);
 					float facDist = (currentState.alt - tdze) / tan(gs * M_PI/180);
 					LatLon tdz = locationBearingDistance(facIntercept, magToTrue(vlocTrk), facDist);
 					ils = new IlsSimulator(tdz, tdze, magToTrue(vlocTrk), gs);
@@ -969,12 +966,22 @@ class TrackSimulator {
 	float speed; // knots 
 	float vvel;  // fpm
 	float track;
+	float lastHd, lastVd;
+	float corrH = 0, corrV = 0;
 	float hWiggle = 0, vWiggle = 0; // add simulated hdg/alt variability
+	void setCDI(float hd, float vd, float decisionHeight) {
+		float gain = min(1.0, curPos.alt / 200.0);
+		corrH = +0.2 * gain * ((abs(hd) < 2.0) ? hd + (hd - lastHd) * 400 : 0);
+		if (abs(vd) < 2.0) 
+			corrV += (gain * -0.01 * (vd + (vd - lastVd) * 30));
+		lastHd = hd;
+		lastVd = vd;
+	}
 	void run(float sec) { 
 		float distToWaypoint = 0;
 		if (!curPos.valid)
 			return;
-		if (activeWaypoint.valid) {
+		if (activeWaypoint.valid && !waypointPassed) {
 			track = bearing(curPos.loc, activeWaypoint.loc) + hWiggle;
 			distToWaypoint = distance(curPos.loc, activeWaypoint.loc);
 		}
@@ -984,6 +991,8 @@ class TrackSimulator {
 		float newAlt = curPos.alt;
 		if (distToWaypoint > 0 ) 
 			newAlt += (activeWaypoint.alt - curPos.alt) * (dist / distToWaypoint) + vWiggle;
+		track += corrH;//distToWaypoint / 1000;
+		newAlt += corrV;//distToWaypoint / 1000;
 		vvel = (newAlt - curPos.alt) / sec * 196.85; // m/s to fpm 
 		curPos = LatLonAlt(newPos, newAlt);
 		if (abs(angularDiff(track, bearing(curPos.loc, activeWaypoint.loc))) >= 90)
@@ -1005,29 +1014,40 @@ class TrackSimFileParser {
 public:
 	TrackSimulator sim;
 	float endAlt = -1;
+	int autoPilotOn = 0, decisionHeight = -1;
 	TrackSimFileParser(std::istream &i) : in(i) {}
 	void run(float sec) { 
 		if (sim.activeWaypoint.valid == false || sim.waypointPassed)  
 			readNextWaypoint();
+		if (autoPilotOn) { 
+			sim.setCDI(hd, vd, decisionHeight / FEET_PER_METER);
+		} 
 		sim.run(sec);
 		if (sim.curPos.valid && sim.curPos.alt < endAlt) 
 			ESP32sim_done();
 	}
 	void readNextWaypoint() { 
-		double lat, lon, alt;
+		double lat, lon, alt, track;
 		int knobSel;
 		float knobVal;
 		std::string s;
 		sim.activeWaypoint.valid = false;
 		while(sim.activeWaypoint.valid == false && std::getline(in, s)) {
 			cout << "READ LINE: " << s<< endl;
+			if (s.find("#") != string::npos)
+				continue;
 			sscanf(s.c_str(), "SPEED=%f", &sim.speed);
 			sscanf(s.c_str(), "ENDALT=%f", &endAlt);
+			sscanf(s.c_str(), "AP=%d", &autoPilotOn);
+			sscanf(s.c_str(), "DH=%d", &decisionHeight);
 			sscanf(s.c_str(), "MODE=%d", &isrData.mode);
 			if (sscanf(s.c_str(), "KNOB=%d,%f", &knobSel, &knobVal) == 2 && knobSel > 0 && knobSel < sizeof(g5KnobValues)/sizeof(g5KnobValues[0]))
 				g5KnobValues[knobSel] = knobVal; 
-			if (sscanf(s.c_str(), "%lf, %lf %lf", &lat, &lon, &alt) == 3) 
-				sim.setWaypoint(LatLonAlt(lat, lon, alt));
+			if (sscanf(s.c_str(), "%lf, %lf %lf %lf", &lat, &lon, &alt, &track) == 4) {  
+				sim.setWaypoint(LatLonAlt(lat, lon, alt / FEET_PER_METER));
+				sim.track = track;
+			} else if (sscanf(s.c_str(), "%lf, %lf %lf", &lat, &lon, &alt) == 3) 
+				sim.setWaypoint(LatLonAlt(lat, lon, alt / FEET_PER_METER));
 			else if (sscanf(s.c_str(), "%lf, %lf", &lat, &lon) == 2) 
 				sim.setWaypoint(LatLonAlt(lat, lon, sim.activeWaypoint.alt));
 		}	
@@ -1079,10 +1099,10 @@ public:
 				
 IntervalTimer hz100(100/*msec*/);
 
+static int loopcount = 0;
 void ESP32sim_loop() {
 	if (!hz100.tick(millis())) 
 		return;
-		
 	if (gdl90file) {
 		std::vector<unsigned char> data(300);
 		gdl90file.read((char *)data.data(), data.size());	
@@ -1091,7 +1111,7 @@ void ESP32sim_loop() {
 			ESP32sim_udpInput(4000, data);
 		}
 	}	
-	if (trackSimFile) {
+	if (trackSimFile || trackSimFile.eof()) {
 		tSim.run(hz100.interval / 1000.0);
 		LatLonAlt p = tSim.sim.curPos;
 			GDL90Parser::State s;
@@ -1103,13 +1123,14 @@ void ESP32sim_loop() {
 			s.vvel = tSim.sim.vvel;
 			s.hvel = tSim.sim.speed;
 			s.palt = (p.alt + 1000) / 25;
-			
+			loopcount++;
+
 			WiFiUDP::InputData buf;
-			buf.resize(7);
-			gdl90.packMsg11(buf.data(), s);
+			buf.resize(128);
+			buf.resize(gdl90.packMsg11(buf.data(), s));
 			ESP32sim_udpInput(4000, buf);
-			buf.resize(32);
-			gdl90.packMsg10(buf.data(), s);
+			buf.resize(128);
+			buf.resize(gdl90.packMsg10(buf.data(), s));
 			ESP32sim_udpInput(4000, buf);
 
 		}
