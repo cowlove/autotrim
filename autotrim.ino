@@ -90,7 +90,7 @@ namespace Display {
 //
 
 // TTGO Schema 
-const struct { 
+const struct PinAssignments { 
 	int ADC = 33;
 	int canTx = 32; /* yellow */
 	int canRx = 26; /* purple */
@@ -162,7 +162,7 @@ void superSend(const char *b) {
 	}
 }
 
-struct {
+struct IsrData {
 	float pitch, roll, knobVal = 0, magHdg, magTrack, ias, tas, palt;
 	int knobSel, mode;
 	bool forceSend;
