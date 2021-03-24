@@ -1,8 +1,8 @@
 
 #BOARD=esp32doit-devkit-v1
 #BOARD=heltec_wifi_kit_32
-#BOARD=nodemcu-32s
-VERBOSE=1
+BOARD=nodemcu-32s
+#VERBOSE=1
 
 CHIP=esp32
 OTA_ADDR=192.168.43.222

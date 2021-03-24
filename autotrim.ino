@@ -1,36 +1,8 @@
-//#include <SPIFFS.h>
-//#include "Update.h"
-
-//  
-// ./parse_sweep ./sweep6_unidirectional_battery_power.txt | grep PR | gnuplot -e 'p "-" u 2:3; pause 10;'
-
-
-#ifndef UBUNTU
-#include <Update.h>			
-#include "WebServer.h"
-#include "DNSServer.h"
-#include "ESPmDNS.h"
-#include <esp_task_wdt.h>
-#include "mySD.h"
-#include <HardwareSerial.h>
-#include "SPI.h"
-#include <CAN.h>
-//#include "FS.h"
-#include "ArduinoOTA.h"
-#include "WiFiUdp.h"
-#include "Wire.h"
-#include "WiFiMulti.h"
-
-#else
+#ifdef UBUNTU
 #include "ESP32sim_ubuntu.h"
-#endif
-
-
-#include "RunningLeastSquares.h"
-#include "PidControl.h"
-#define LED_PIN 2
-
-WiFiMulti wifi;
+#else
+#include <CAN.h>
+#endif 
 	
 #include <queue>
 #include <string>
@@ -38,10 +10,15 @@ WiFiMulti wifi;
 #include <vector>
 #include <iterator>
 #include <istream>
-#include "jimlib.h"
 
+#include "RunningLeastSquares.h"
+#include "PidControl.h"
+#include "jimlib.h"
 #include "G90Parser.h"
 
+//#define LED_PIN 2
+
+WiFiMulti wifi;
 WiFiUDP udpG90;
 GDL90Parser gdl90;
 GDL90Parser::State state;
@@ -464,7 +441,6 @@ bool wifiTryConnect(const char *ap, const char *pw, int seconds = 15) {
 	if (WiFi.status() != WL_CONNECTED) {
 		WiFi.begin(ap, pw);
 		for(int d = 0; d < seconds * 10 && WiFi.status() != WL_CONNECTED; d++) {
-			digitalWrite(LED_PIN, d % 2);
 			delay(100);
 		}
 	}
@@ -485,7 +461,6 @@ void setup() {
 	Serial2.begin(9600, SERIAL_8N1, pins.serialRx, pins.serialTx);
 	Serial2.setTimeout(10);
 	
-	pinMode(LED_PIN, OUTPUT);
 	pinMode(pins.button, INPUT_PULLUP);
 //	pinMode(3,INPUT);
 
@@ -505,8 +480,6 @@ void setup() {
 		wifi.run();
 		delay(10);
 	}
-
-	digitalWrite(LED_PIN, 1);
 
 	if (WiFi.status() == WL_CONNECTED) {
 		Serial.printf("connected\n");
