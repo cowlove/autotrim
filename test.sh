@@ -1,6 +1,7 @@
 #!/bin/bash -x
 
 make autotrim_ubuntu
+rm [123].png out.jpg
 
 # Virtual ILS at 140deg, approaching from the left on a track of 100
 cat > tracksim.txt <<EOF
