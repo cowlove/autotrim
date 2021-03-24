@@ -11,7 +11,7 @@
 #include <iterator>
 #include <istream>
 
-#include "RunningLeastSquares.h"
+#include "RollingLeastSquares.h"
 #include "PidControl.h"
 #include "jimlib.h"
 #include "G90Parser.h"

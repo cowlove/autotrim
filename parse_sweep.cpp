@@ -2,7 +2,7 @@
 #include <fstream>
 #include <cmath>
 
-#include "RunningLeastSquares.h"
+#include "RollingLeastSquares.h"
 
 ///parse_sweep ./sweep6_unidirectional_battery_power.txt  | grep CR | gnuplot -e 'p [0:20][970:990] "-" u 2:3; pause 10'
 
