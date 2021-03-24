@@ -560,8 +560,6 @@ double glideslope(float distance, float alt1, float alt2) {
 		return atan2(alt1 - alt2, distance) * 180/M_PI; 
 }
 
-bool ESP32sim_makeKml = false;
-
 class IlsSimulator {
 public:
 	const LatLon tdzLocation; // lat/long of touchdown point 
@@ -843,10 +841,6 @@ void loop() {
 			GDL90Parser::State s = gdl90.getState();
 			if (s.valid && s.updated) {
 				currentState = s;
-				if (ESP32sim_makeKml) {
-					printf("%f,%f\n", s.lat, s.lon);
-				}
-
 				int vvel = (signed short)(s.vvel * 64);
 				LatLon target = (ils != NULL) ? ils->tdzLocation : LatLon(47.90558443637955, -122.10252512643517);
 				LatLon here(s.lat, s.lon);
@@ -997,7 +991,7 @@ public:
 		} 
 		sim.run(sec);
 		if (sim.curPos.valid && sim.curPos.alt < endAlt) 
-			ESP32sim_done();
+			ESP32sim_exit();
 	}
 	void readNextWaypoint() { 
 		double lat, lon, alt, track;
@@ -1027,99 +1021,87 @@ public:
 	}
 };
 
-ifstream gdl90file; 
-ifstream trackSimFile;
-TrackSimFileParser tSim(trackSimFile);
 
-void ESP32sim_setDebug(char const *) {}
 
-void ESP32sim_parseArg(char **&a, char **la) {
-	if (strcmp(*a, "--kml") == 0) ESP32sim_makeKml = true;
-	if (strcmp(*a, "--gdltest") == 0) {
-		ifstream f = ifstream(*(++a), ios_base::in | ios_base::binary);
-		while(f) { 
-			gdl90.add(f.get());
+class ESP32sim_autotrim : ESP32sim_Module { 
+	ifstream gdl90file; 
+	ifstream trackSimFile;
+	TrackSimFileParser tSim = TrackSimFileParser(trackSimFile);
+	int last_us = 0;	
+	bool makeKml = false;
+	IntervalTimer hz100 = IntervalTimer(100/*msec*/);
+	int loopcount = 0;
+
+	void parseArg(char **&a, char **la) override {
+		printf("at parse arg\n");
+		if (strcmp(*a, "--kml") == 0) makeKml = true;
+		if (strcmp(*a, "--gdltest") == 0) {
+			ifstream f = ifstream(*(++a), ios_base::in | ios_base::binary);
+			while(f) { 
+				gdl90.add(f.get());
+			}
+			done();
+			exit(0);
 		}
-		ESP32sim_done();
+		if (strcmp(*a, "--gdl") == 0) 
+			gdl90file = ifstream(*(++a), ios_base::in | ios_base::binary);
+		if (strcmp(*a, "--gdlseek") == 0) {
+			int pos = 0;
+			sscanf(*(++a), "%d", &pos);
+			gdl90file.seekg(pos);
+		}
+		if (strcmp(*a, "--tracksim") == 0) 
+			trackSimFile = ifstream(*(++a), ios_base::in | ios_base::binary);
+	}
+	void setup() override {}
+			
+	void loop() override {
+		if (!hz100.tick(millis())) 
+			return;
+		if (gdl90file) {
+			std::vector<unsigned char> data(300);
+			gdl90file.read((char *)data.data(), data.size());	
+			int n = gdl90file.gcount();
+			if (gdl90file && n > 0) { 
+				ESP32sim_udpInput(4000, data);
+			}
+		}	
+		if (trackSimFile || trackSimFile.eof()) {
+			tSim.run(hz100.interval / 1000.0);
+			LatLonAlt p = tSim.sim.curPos;
+				GDL90Parser::State s;
+			if (p.valid) { 
+				s.lat = p.loc.lat;
+				s.lon = p.loc.lon;
+				s.alt = p.alt;
+				s.track = tSim.sim.track;
+				s.vvel = tSim.sim.vvel;
+				s.hvel = tSim.sim.speed;
+				s.palt = (p.alt + 1000) / 25;
+				loopcount++;
+
+				WiFiUDP::InputData buf;
+				buf.resize(128);
+				buf.resize(gdl90.packMsg11(buf.data(), s));
+				ESP32sim_udpInput(4000, buf);
+				buf.resize(128);
+				buf.resize(gdl90.packMsg10(buf.data(), s));
+				ESP32sim_udpInput(4000, buf);
+
+			}
+			/*printf("%3d %d %d %+4.1f %+4.1f %+11.6f, %+11.6f a:%4.0f t:%4.1f r:%4.0f\n", tSim.sim.wayPointCount, tSim.sim.waypointPassed, isrData.mode,
+				hd, vd, s.lat, s.lon, (float)s.alt, s.track, 
+				distance(p.loc, tSim.sim.activeWaypoint.loc));
+			*/
+		}	
+	}  
+		
+	void done() override{
+		printf("gdl90 msgs %d errors %d\n", gdl90.msgCount, gdl90.errCount);
 		exit(0);
-	}
-	if (strcmp(*a, "--gdl") == 0) 
-		gdl90file = ifstream(*(++a), ios_base::in | ios_base::binary);
-	if (strcmp(*a, "--gdlseek") == 0) {
-		int pos = 0;
-		sscanf(*(++a), "%d", &pos);
-		gdl90file.seekg(pos);
-	}
-	if (strcmp(*a, "--tracksim") == 0) 
-		trackSimFile = ifstream(*(++a), ios_base::in | ios_base::binary);
-}
-void ESP32sim_setup() {
-	if (ESP32sim_makeKml) 
-		printf("<Placemark><name>Untitled Path</name><LineString><tessellate>1</tessellate><altitudeMode>relativeToGround</altitudeMode><coordinates>\n");
-}
-
-int last_us = 0;	
-
-class IntervalTimer {
-public: 
-	double last, interval;
-	IntervalTimer(double i) : interval(i) {}
-	bool tick(double now) {
-		bool rval = (floor(now / interval) != floor(last / interval));
-		last = now;
-		return rval;
-	}
-};
-				
-IntervalTimer hz100(100/*msec*/);
-
-static int loopcount = 0;
-void ESP32sim_loop() {
-	if (!hz100.tick(millis())) 
-		return;
-	if (gdl90file) {
-		std::vector<unsigned char> data(300);
-		gdl90file.read((char *)data.data(), data.size());	
-		int n = gdl90file.gcount();
-		if (gdl90file && n > 0) { 
-			ESP32sim_udpInput(4000, data);
-		}
-	}	
-	if (trackSimFile || trackSimFile.eof()) {
-		tSim.run(hz100.interval / 1000.0);
-		LatLonAlt p = tSim.sim.curPos;
-			GDL90Parser::State s;
-		if (p.valid) { 
-			s.lat = p.loc.lat;
-			s.lon = p.loc.lon;
-			s.alt = p.alt;
-			s.track = tSim.sim.track;
-			s.vvel = tSim.sim.vvel;
-			s.hvel = tSim.sim.speed;
-			s.palt = (p.alt + 1000) / 25;
-			loopcount++;
-
-			WiFiUDP::InputData buf;
-			buf.resize(128);
-			buf.resize(gdl90.packMsg11(buf.data(), s));
-			ESP32sim_udpInput(4000, buf);
-			buf.resize(128);
-			buf.resize(gdl90.packMsg10(buf.data(), s));
-			ESP32sim_udpInput(4000, buf);
-
-		}
-		/*printf("%3d %d %d %+4.1f %+4.1f %+11.6f, %+11.6f a:%4.0f t:%4.1f r:%4.0f\n", tSim.sim.wayPointCount, tSim.sim.waypointPassed, isrData.mode,
-			hd, vd, s.lat, s.lon, (float)s.alt, s.track, 
-			distance(p.loc, tSim.sim.activeWaypoint.loc));
-		*/
-	}	
-}  
-	
-void ESP32sim_done() {
-	if (ESP32sim_makeKml) 
-		printf("</coordinates></LineString></Placemark>");
-	printf("gdl90 msgs %d errors %d\n", gdl90.msgCount, gdl90.errCount);
-	exit(0);
-} 
-void ESP32sim_JDisplay_forceUpdate	() {}
+	} 
+} autotrim;
 #endif
+
+
+
