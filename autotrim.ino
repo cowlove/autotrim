@@ -99,7 +99,7 @@ int udpPortIn = 7892;
 
 SL30 sl30;
 
-msdFile fd;
+File fd;
 bool otaInProgress = false;
 int udpCanOut = 0; // debug output, send all CAN data out over udp port
 static int cmdCount = 0;
