@@ -1032,7 +1032,8 @@ ifstream trackSimFile;
 TrackSimFileParser tSim(trackSimFile);
 
 void ESP32sim_setDebug(char const *) {}
-void ESP32sim_parseArg(char **&a, char **endA) {
+
+void ESP32sim_parseArg(char **&a, char **la) {
 	if (strcmp(*a, "--kml") == 0) ESP32sim_makeKml = true;
 	if (strcmp(*a, "--gdltest") == 0) {
 		ifstream f = ifstream(*(++a), ios_base::in | ios_base::binary);
@@ -1052,11 +1053,11 @@ void ESP32sim_parseArg(char **&a, char **endA) {
 	if (strcmp(*a, "--tracksim") == 0) 
 		trackSimFile = ifstream(*(++a), ios_base::in | ios_base::binary);
 }
-
 void ESP32sim_setup() {
 	if (ESP32sim_makeKml) 
 		printf("<Placemark><name>Untitled Path</name><LineString><tessellate>1</tessellate><altitudeMode>relativeToGround</altitudeMode><coordinates>\n");
 }
+
 int last_us = 0;	
 
 class IntervalTimer {
