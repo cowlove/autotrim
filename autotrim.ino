@@ -15,7 +15,9 @@
 #include "PidControl.h"
 #include "jimlib.h"
 #include "G90Parser.h"
+#include "WaypointNav.h"
 
+using namespace WaypointNav;
 //#define LED_PIN 2
 
 WiFiMulti wifi;
@@ -780,7 +782,7 @@ void loop() {
 class ESP32sim_autotrim : ESP32sim_Module { 
 	ifstream gdl90file; 
 	ifstream trackSimFile;
-	TrackSimFileParser tSim = TrackSimFileParser(trackSimFile);
+	WaypointNav::WaypointSequencer tSim = WaypointNav::WaypointSequencer(trackSimFile);
 	int last_us = 0;	
 	bool makeKml = false;
 	IntervalTimer hz100 = IntervalTimer(100/*msec*/);
@@ -823,21 +825,22 @@ class ESP32sim_autotrim : ESP32sim_Module {
 		if (trackSimFile || trackSimFile.eof()) {
 			tSim.run(hz100.interval / 1000.0);
 			if (tSim.autoPilotOn) { 
-				tSim.sim.setCDI(hd, vd, tSim.decisionHeight);
+				tSim.wptTracker.setCDI(hd, vd, tSim.decisionHeight);
 			}
-			if (tSim.inputs.find("0") != tSim.inputs.end());
-				isrData.mode = tSim.inputs["0"];
-			g5KnobValues[2] = tSim.inputs["1"];
-			g5KnobValues[4] = tSim.inputs["2"];
-			LatLonAlt p = tSim.sim.curPos;
+			if (tSim.inputs.find("MODE") != tSim.inputs.end());
+				isrData.mode = tSim.inputs["MODE"];
+			g5KnobValues[1] = tSim.inputs["HDGBUG"];
+			g5KnobValues[2] = tSim.inputs["ALTBUG"];
+			g5KnobValues[4] = tSim.inputs["VLOCBUG"];
+			LatLonAlt p = tSim.wptTracker.curPos;
 				GDL90Parser::State s;
 			if (p.valid) { 
 				s.lat = p.loc.lat;
 				s.lon = p.loc.lon;
 				s.alt = p.alt;
-				s.track = tSim.sim.steerHdg;
-				s.vvel = tSim.sim.vvel;
-				s.hvel = tSim.sim.speed;
+				s.track = tSim.wptTracker.steerHdg;
+				s.vvel = tSim.wptTracker.vvel;
+				s.hvel = tSim.wptTracker.speed;
 				s.palt = (p.alt + 1000) / 25;
 				loopcount++;
 
