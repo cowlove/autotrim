@@ -776,107 +776,6 @@ void loop() {
 ////////////////////////////////////////////////////////////////////////////////////////
 // the rest of the file is simulation support code 
 
-class TrackSimulator {
-  public: 
-	LatLonAlt curPos;
-	int wayPointCount = 0;
-	LatLonAlt activeWaypoint;
-	bool waypointPassed;
-	float speed; // knots 
-	float vvel;  // fpm
-	float steerHdg, track;
-	float lastHd, lastVd;
-	float corrH = 0, corrV = 0;
-	float hWiggle = 0, vWiggle = 0; // add simulated hdg/alt variability
-	void setCDI(float hd, float vd, float decisionHeight) {
-		float gain = min(1.0, curPos.alt / 200.0);
-		corrH = +0.2 * gain * ((abs(hd) < 2.0) ? hd + (hd - lastHd) * 400 : 0);
-		if (abs(vd) < 2.0) 
-			corrV += (gain * -0.01 * (vd + (vd - lastVd) * 30));
-		lastHd = hd;
-		lastVd = vd;
-	}
-
-	void run(float sec) { 
-		float distToWaypoint = 0;
-		if (!curPos.valid)
-			return;
-		if (activeWaypoint.valid && !waypointPassed) {
-			steerHdg = bearing(curPos.loc, activeWaypoint.loc) + hWiggle;
-			distToWaypoint = distance(curPos.loc, activeWaypoint.loc);
-		}
-		float distTravelled = speed * .51444 * sec;
-		float newAlt = curPos.alt;
-
-		if (distToWaypoint > 0 ) 
-			newAlt += (activeWaypoint.alt - curPos.alt) * (distTravelled / distToWaypoint) + vWiggle;
-		steerHdg += corrH;//distToWaypoint / 1000;
-		newAlt += corrV;//distToWaypoint / 1000;
-		vvel = (newAlt - curPos.alt) / sec * 196.85; // m/s to fpm 
-		track = onNavigate(steerHdg);
-		LatLon newPos = locationBearingDistance(curPos.loc, track, distTravelled);
-		curPos = LatLonAlt(newPos, newAlt);
-		if (abs(angularDiff(steerHdg, bearing(curPos.loc, activeWaypoint.loc))) >= 90)
-			waypointPassed = true;
-	}	
-	function<float(float)> onNavigate = [](float steer){ return steer; };
-	void setWaypoint(const LatLonAlt &p) {
-		activeWaypoint = p;
-		waypointPassed = false;
-		wayPointCount++;
-		if (wayPointCount == 1) { // first waypoint, initial position
-			curPos = activeWaypoint;
-			waypointPassed = true;
-		}
-	}
-};
-
-class TrackSimFileParser { 
-	std::istream &in;
-public:
-	TrackSimulator sim;
-	float endAlt = -1;
-	int autoPilotOn = 0, decisionHeight = -1;
-	TrackSimFileParser(std::istream &i) : in(i) {}
-	void run(float sec) { 
-		if (sim.activeWaypoint.valid == false || sim.waypointPassed)  
-			readNextWaypoint();
-		if (autoPilotOn) { 
-			sim.setCDI(hd, vd, decisionHeight / FEET_PER_METER);
-		} 
-		sim.run(sec);
-		if (sim.curPos.valid && sim.curPos.alt < endAlt) 
-			ESP32sim_exit();
-	}
-	void readNextWaypoint() { 
-		double lat, lon, alt, track;
-		int knobSel;
-		float knobVal;
-		std::string s;
-		sim.activeWaypoint.valid = false;
-		while(sim.activeWaypoint.valid == false && std::getline(in, s)) {
-			cout << "READ LINE: " << s<< endl;
-			if (s.find("#") != string::npos)
-				continue;
-			sscanf(s.c_str(), "SPEED=%f", &sim.speed);
-			sscanf(s.c_str(), "ENDALT=%f", &endAlt);
-			sscanf(s.c_str(), "AP=%d", &autoPilotOn);
-			sscanf(s.c_str(), "DH=%d", &decisionHeight);
-			sscanf(s.c_str(), "MODE=%d", &isrData.mode);
-			if (sscanf(s.c_str(), "KNOB=%d,%f", &knobSel, &knobVal) == 2 && knobSel > 0 && knobSel < sizeof(g5KnobValues)/sizeof(g5KnobValues[0]))
-				g5KnobValues[knobSel] = knobVal; 
-			if (sscanf(s.c_str(), "%lf, %lf %lf %lf", &lat, &lon, &alt, &track) == 4) {  
-				sim.setWaypoint(LatLonAlt(lat, lon, alt / FEET_PER_METER));
-				sim.steerHdg = track;
-			} else if (sscanf(s.c_str(), "%lf, %lf %lf", &lat, &lon, &alt) == 3) 
-				sim.setWaypoint(LatLonAlt(lat, lon, alt / FEET_PER_METER));
-			else if (sscanf(s.c_str(), "%lf, %lf", &lat, &lon) == 2) 
-				sim.setWaypoint(LatLonAlt(lat, lon, sim.activeWaypoint.alt));
-		}	
-	}
-};
-
-
 
 class ESP32sim_autotrim : ESP32sim_Module { 
 	ifstream gdl90file; 
@@ -923,6 +822,13 @@ class ESP32sim_autotrim : ESP32sim_Module {
 		}	
 		if (trackSimFile || trackSimFile.eof()) {
 			tSim.run(hz100.interval / 1000.0);
+			if (tSim.autoPilotOn) { 
+				tSim.sim.setCDI(hd, vd, tSim.decisionHeight);
+			}
+			if (tSim.inputs.find("0") != tSim.inputs.end());
+				isrData.mode = tSim.inputs["0"];
+			g5KnobValues[2] = tSim.inputs["1"];
+			g5KnobValues[4] = tSim.inputs["2"];
 			LatLonAlt p = tSim.sim.curPos;
 				GDL90Parser::State s;
 			if (p.valid) { 
