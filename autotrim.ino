@@ -505,8 +505,18 @@ void setup() {
 	can.begin();
 }
 GDL90Parser::State currentState;
-
 static EggTimer report(2000);
+
+
+void fakeApproach(LatLon now, float vlocTrk, float altBug) { 
+	const float gs = 3.0;
+	float tdze = altBug - 200 / 3.281;
+	LatLon facIntercept = locationBearingDistance(now, currentState.track, 1600);
+	float facDist = 1600 + (currentState.alt - tdze) / tan(gs * M_PI/180);
+	LatLon tdz = locationBearingDistance(facIntercept, magToTrue(vlocTrk), facDist);
+	ils = new IlsSimulator(tdz, tdze, magToTrue(vlocTrk), gs);
+}
+
 void loop() {
 	uint64_t now = micros();
 	esp_task_wdt_reset();
@@ -697,13 +707,17 @@ void loop() {
 			if (s.valid && s.updated) {
 				currentState = s;
 				int vvel = (signed short)(s.vvel * 64);
-				LatLon target = (ils != NULL) ? ils->tdzLocation : LatLon(47.90558443637955, -122.10252512643517);
-				LatLon here(s.lat, s.lon);
-				float brg = bearing(here, target);
-				float range = distance(here, target);
+				float brg = 0, range = 0, hat = 0;
+				if (ils != NULL) { 
+					LatLon target = (ils != NULL) ? ils->tdzLocation : LatLon(47.90558443637955, -122.10252512643517);
+					LatLon here(s.lat, s.lon);
+					brg = bearing(here, target);
+					range = distance(here, target);
+					hat = s.alt - ils->tdze;
+				}
 				count++;
-				Serial.printf("%08.2f pos %+11.6f %+11.6f track %6.1f, brg %6.1f range %5.0f palt %5d, galt %5d, vvel %+4d, hvel %3d CDI:%+.1f GS:%+.1f\n", 
-						millis()/1000.0, s.lat, s.lon, s.track, brg, range, (s.palt * 25) - 1000, (int) (s.alt * FEET_PER_METER), 
+				Serial.printf("%08.2f pos %+11.6f %+11.6f track %6.1f, ils-brg %6.1f ils-range %5.0f ils-hat %5.0f palt %5d, galt %5d, vvel %+4d, hvel %3d CDI:%+.1f GS:%+.1f\n", 
+						millis()/1000.0, s.lat, s.lon, s.track, brg, range, hat, (s.palt * 25) - 1000, (int) (s.alt * FEET_PER_METER), 
 					vvel, s.hvel, hd, vd);		
 			}
 		}
@@ -744,17 +758,15 @@ void loop() {
 				float vlocTrk = g5KnobValues[4] * 180/M_PI;
 				float altBug = g5KnobValues[2];
 				if (vlocTrk != 0) { 
-					const float gs = 3.0;
-					float tdze = altBug - 200 / 3.281;
-					LatLon facIntercept = locationBearingDistance(now, currentState.track, 3000);
-					float facDist = (currentState.alt - tdze) / tan(gs * M_PI/180);
-					LatLon tdz = locationBearingDistance(facIntercept, magToTrue(vlocTrk), facDist);
-					ils = new IlsSimulator(tdz, tdze, magToTrue(vlocTrk), gs);
-					printf("Set ILS\n");
+					fakeApproach(now, vlocTrk, altBug);
 				} else { 
 					Approach *a = findBestApproach(now);
 					if (a != NULL)
 						ils = new IlsSimulator(LatLon(a->lat, a->lon), a->tdze / 3.281, magToTrue(a->fac), a->gs);
+				}
+				if (ils != NULL) { 
+					Serial.print("Started ILS, ");
+					Serial.println(ils->toString().c_str());
 				}
 			}
 			if (ils != NULL) { 
@@ -829,9 +841,9 @@ class ESP32sim_autotrim : ESP32sim_Module {
 			}
 			if (tSim.inputs.find("MODE") != tSim.inputs.end());
 				isrData.mode = tSim.inputs["MODE"];
-			g5KnobValues[1] = tSim.inputs["HDGBUG"];
+			g5KnobValues[1] = tSim.inputs["HDGBUG"] * M_PI/180;
 			g5KnobValues[2] = tSim.inputs["ALTBUG"];
-			g5KnobValues[4] = tSim.inputs["VLOCBUG"];
+			g5KnobValues[4] = tSim.inputs["VLOCBUG"] * M_PI/180;
 			LatLonAlt p = tSim.wptTracker.curPos;
 				GDL90Parser::State s;
 			if (p.valid) { 

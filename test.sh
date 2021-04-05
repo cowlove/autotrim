@@ -14,5 +14,5 @@ EOF
 
 make autotrim_ubuntu && \
 ./autotrim_ubuntu --serial --seconds 179.11 --tracksim ./tracksim.txt  > out.txt && tail -1 out.txt \
-    | egrep '(range\s+17\s.*galt\s+13,)'
+    | egrep '(range\s+21\s.*galt\s+9,)'
  
