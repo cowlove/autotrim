@@ -14,7 +14,7 @@
 #include "RollingLeastSquares.h"
 #include "PidControl.h"
 #include "jimlib.h"
-#include "G90Parser.h"
+#include "GDL90Parser.h"
 #include "WaypointNav.h"
 
 using namespace WaypointNav;

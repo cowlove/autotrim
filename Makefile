@@ -20,7 +20,7 @@ backtrace:
 	tr ' ' '\n' | /home/jim/.arduino15/packages/esp32/tools/xtensa-esp32-elf-gcc/*/bin/xtensa-esp32-elf-addr2line -f -i -e $(BUILD_DIR)/*.elf
 
 
-autotrim_ubuntu:	autotrim.ino ESP32sim_ubuntu.h jimlib.h G90Parser.h PidControl.h WaypointNav.h
+autotrim_ubuntu:	autotrim.ino ESP32sim_ubuntu.h jimlib.h GDL90Parser.h PidControl.h WaypointNav.h
 	g++  -x c++ -g $< -o $@ -DESP32 -DUBUNTU -I./ 
 # add -pg to profile 
 	
