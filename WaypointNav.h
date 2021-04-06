@@ -1,1 +1,1 @@
-/home/jim/winglevlr/WaypointNav.h
+../winglevlr/WaypointNav.h
