@@ -657,7 +657,6 @@ void loop() {
 	static int startupPeriod = 20000;
 	if (millis() > startupPeriod)
 		startupPeriod = 0;
-
 	
 	if (sl30Heartbeat.tick()) {
 		if (0) { 
@@ -691,7 +690,9 @@ void loop() {
 			//e465011fc92940
 			//e4650113e72a40
 		}	
-		sl30.pmrrv("301234E"); // send arbitary NAV software version packet as heartbeat
+		std::string s = sl30.pmrrv("301234E"); // send arbitary NAV software version packet as heartbeat
+		Serial2.print(s.c_str());
+		//Serial.print(s.c_str());
 	}
 	
 
@@ -716,7 +717,7 @@ void loop() {
 					hat = s.alt - ils->tdze;
 				}
 				count++;
-				Serial.printf("%08.2f pos %+11.6f %+11.6f track %6.1f, ils-brg %6.1f ils-range %5.0f ils-hat %5.0f palt %5d, galt %5d, vvel %+4d, hvel %3d CDI:%+.1f GS:%+.1f\n", 
+				Serial.printf("%08.2f pos %+11.6f %+11.6f track %6.1f, ils-brg %6.1f ils-range %5.0f ils-hat %5.0f palt %5d:, galt %5d, vvel %+4d, hvel %3d CDI:%+.1f GS:%+.1f\n", 
 						millis()/1000.0, s.lat, s.lon, s.track, brg, range, hat, (s.palt * 25) - 1000, (int) (s.alt * FEET_PER_METER), 
 					vvel, s.hvel, hd, vd);		
 			}
@@ -741,7 +742,6 @@ void loop() {
 	static EggTimer g5Timer(100);
 
 	if (g5Timer.tick()) { 
-#ifndef UBUNTU
 		if (debugMoveNeedles || isrData.mode == 6 || startupPeriod > 0) { 
 			hd += .05;
 			vd += .075;
@@ -749,9 +749,11 @@ void loop() {
 			if (vd > 2) vd = -2;
 			if (millis() - isrData.timestamp > 1000) 
 				hd = vd = -2;
-			sl30.setCDI(hd, vd);
+			std::string s = sl30.setCDI(hd, vd);
+			Serial2.print(s.c_str());
+			//Serial.print(s.c_str());
+	
 		}
-#endif
 		if (isrData.mode == 5) {
 			LatLon now(currentState.lat, currentState.lon); 
 			if (ils == NULL) {
@@ -773,7 +775,9 @@ void loop() {
 				ils->setCurrentLocation(now, currentState.alt);
 				hd = ils->cdiPercent() * 2.0;
 				vd = ils->gsPercent() * 2.0;
-				sl30.setCDI(hd, vd);
+				std::string s = sl30.setCDI(hd, vd);
+				Serial2.print(s.c_str());
+				//Serial.print(s.c_str());
 			}
 		} else if (ils != NULL) {
 			delete ils;
@@ -858,10 +862,10 @@ class ESP32sim_autotrim : ESP32sim_Module {
 
 				WiFiUDP::InputData buf;
 				buf.resize(128);
-				buf.resize(gdl90.packMsg11(buf.data(), s));
+				buf.resize(gdl90.packMsg11(buf.data(), buf.size(), s));
 				ESP32sim_udpInput(4000, buf);
 				buf.resize(128);
-				buf.resize(gdl90.packMsg10(buf.data(), s));
+				buf.resize(gdl90.packMsg10(buf.data(), buf.size(), s));
 				ESP32sim_udpInput(4000, buf);
 
 			}
