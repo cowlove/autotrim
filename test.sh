@@ -13,6 +13,6 @@ INPUT.MODE 5
 EOF
 
 make autotrim_ubuntu && \
-./autotrim_ubuntu --serial --seconds 179.11 --tracksim ./tracksim.txt  > out.txt && tail -1 out.txt \
-    | egrep '(range\s+21\s.*galt\s+9,)'
+./autotrim_ubuntu --serial --seconds 178.71 --tracksim ./tracksim.txt  > out.txt && tail -1 out.txt \
+    | egrep '(range\s+1\s.*ils-hat\s+1\s)'
  
