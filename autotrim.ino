@@ -141,7 +141,7 @@ void superSend(const char *b) {
 }
 
 struct IsrData {
-	float pitch, roll, knobVal = 0, magHdg, magTrack, ias, tas, palt;
+	float pitch, roll, knobVal = 0, magHdg, magTrack, ias, tas, palt, slip;
 	int knobSel, mode;
 	bool forceSend;
 	uint64_t timestamp;
@@ -363,6 +363,15 @@ void canParse(int id, int len, int timestamp, const char *ibuf) {
 			isrData.exceptions++;
 		}
 		//sendCanData(false);
+	}
+	if (lastId == 0x18882100 && ibuf[0] == 0xdc && ibuf[1] == 0x02 && mpSize >= 16) {
+		try {
+			isrData.slip = floatFromBinary(&ibuf[12]); 
+			sendUdpCan("SL=%f", isrData.slip * 180/M_PI);
+		} catch(...) {
+			isrData.slip = 0; 
+			isrData.exceptions++;
+		}
 	}
 	if (lastId == 0x18882100 && ibuf[0] == 0xdd && ibuf[1] == 0x0a && mpSize >= 44) {
 		try {
