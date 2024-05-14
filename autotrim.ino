@@ -2,6 +2,7 @@
 #include "ESP32sim_ubuntu.h"
 #else
 #include <CAN.h>
+#include <TTGO_TS.h>
 #endif 
 	
 #include <queue>
@@ -16,11 +17,12 @@
 #include "jimlib.h"
 #include "GDL90Parser.h"
 #include "WaypointNav.h"
+#include "espNowMux.h"
 
 using namespace WaypointNav;
 //#define LED_PIN 2
 
-WiFiMulti wifi;
+//WiFiMulti wifi;
 WiFiUDP udpG90;
 GDL90Parser gdl90;
 GDL90Parser::State state;
@@ -124,6 +126,7 @@ static bool first = true;
 
 // send udp packet multiple times on broadcast address and all addresses in normal EchoUAT wifi range 
 void superSend(const char *b) { 
+#if 0 
    for (int repeat = 0; repeat < 1; repeat++) { 
 		udp.beginPacket("255.255.255.255", 7891);
 		udp.write((uint8_t *)b, strlen(b));
@@ -138,6 +141,9 @@ void superSend(const char *b) {
 			}
 		}
 	}
+#endif
+	espNowMux.send("g5", (uint8_t*)b, strlen(b));
+	Serial.print(b);
 }
 
 struct IsrData {
@@ -151,12 +157,6 @@ struct IsrData {
 	int udpErrs;
 } isrData;
 
-class ScopedUnlockMutex {
-	Mutex &mut;
-public:
-	ScopedUnlockMutex(Mutex &m) : mut(m) { mut.unlock(); }
-	~ScopedUnlockMutex() { mut.lock(); }
-}; 
 
 class CanWrapper {
 	Mutex canMutex;
@@ -236,11 +236,11 @@ public:
 		isrCount++;
 	}
 	static CanWrapper *instancePtr;
-} can;
+};
 
 CanWrapper *CanWrapper::instancePtr = NULL;
 
-
+CanWrapper *can = NULL;
 uint8_t canDebugBuf[1024];
 PidControl pid(2);
 static RollingAverage<int,1000> trimPosAvg;
@@ -249,7 +249,7 @@ int canSerial = 0;
 void sendDebugData() { 
 	char sbuf[160];				
 	snprintf(sbuf, sizeof(sbuf), "%d %f %s DEBUG\n", 
-		(int)can.pktCount, (float)trimPosAvg.average(), WiFi.localIP().toString().c_str());
+		(int)can->pktCount, (float)trimPosAvg.average(), WiFi.localIP().toString().c_str());
 	//superSend(sbuf);
 	//Serial.printf(sbuf);
 }
@@ -262,7 +262,6 @@ void sendUdpCan(const char *format, ...) {
 	superSend(buf);
     va_end(args);
 }
-
 
 void sendCanData() { 
 	char sbuf[160];				
@@ -461,12 +460,15 @@ static PinPulse pp[] = { PinPulse(pins.relay1), PinPulse(pins.relay2) };
 
 
 void setup() {
-	esp_task_wdt_init(20, true);
+	esp_task_wdt_init(120, true);
 	esp_task_wdt_add(NULL);
 
 	Serial.begin(921600, SERIAL_8N1);
 	Serial.setTimeout(10);
-	Serial.printf("AUTOTRIM\n");
+	//while(1)  { 
+		Serial.printf("AUTOTRIM\n");
+		delay(100);
+	//}
 
 	Serial2.begin(9600, SERIAL_8N1, pins.serialRx, pins.serialTx);
 	Serial2.setTimeout(10);
@@ -480,14 +482,15 @@ void setup() {
 	Display::jd.forceUpdate();
 #endif
 
-	wifi.addAP("Ping-582B", "");
-	wifi.addAP("Flora_2GEXT", "maynards");
-	wifi.addAP("Team America", "51a52b5354");
-	wifi.addAP("ChloeNet", "niftyprairie7");
+#if 0 
+	WiFi.begin("Ping-582B", "");
+	//wifi.addAP("Flora_2GEXT", "maynards");
+	//wifi.addAP("Team America", "51a52b5354");
+	//wifi.addAP("ChloeNet", "niftyprairie7");
 	uint64_t startms = millis();
 	Serial.printf("Waiting for wifi...\n");
 	while (digitalRead(pins.button) != 0 && WiFi.status() != WL_CONNECTED) {
-		wifi.run();
+		//wifi.run();
 		delay(10);
 	}
 
@@ -498,20 +501,30 @@ void setup() {
 		ArduinoOTA.begin();
 		ArduinoOTA.onStart([]() {
 			esp_task_wdt_delete(NULL);
-			can.reset();
+			//can->reset();
 			Serial.println("Start");
 			otaInProgress = true;
 		});
-		openLogFile("CAN%03d.TXT");
+		//openLogFile("CAN%03d.TXT");
 	} 
-	
+#endif
+
 	adcAttachPin(pins.ADC);
 	//analogSetCycles(255);
 	pid.setGains(4, 0, 0);
 	pid.finalGain = 1;
 	
-	can.onReceive(canParse);
-	can.begin();
+	espNowMux.registerReadCallback("g5", 
+        [](const uint8_t *mac, const uint8_t *data, int len){
+			string s;
+			s.assign((const char *)data, len);
+			Serial.printf("G5 data: %s\n", s.c_str()); 
+    });
+
+
+	can = new CanWrapper();
+	can->onReceive(canParse);
+	can->begin();
 }
 GDL90Parser::State currentState;
 static EggTimer report(2000);
@@ -532,7 +545,7 @@ void loop() {
 	ArduinoOTA.handle();
 	if (otaInProgress) {
 		esp_task_wdt_init(220, true);
-		can.reset();
+		can->reset();
 		return;
 	}
 #ifdef XDISPLAY
@@ -546,14 +559,14 @@ void loop() {
 		pp[0].pulse(1, 1000);
 		pp[1].pulse(1, 2000);
 	} 
-	can.run(pdMS_TO_TICKS(5), 20);
+	can->run(pdMS_TO_TICKS(5), 20);
 	
 	if (lastLoopTime != -1) 
 		loopTimeAvg.add(now - lastLoopTime);
 	lastLoopTime = now;
 	
 	if (canResetTimer.tick()) {
-		can.reset();
+		can->reset();
 	}
 	
 	if (report.tick()) { 
@@ -561,7 +574,7 @@ void loop() {
 		udp.beginPacket("255.255.255.255", 9000);
 		char b[128];
 		snprintf(b, sizeof(b), "%d %s    " __BASE_FILE__ "   " __DATE__ "   " __TIME__ "   0x%08x\n", 
-				(int)(millis() / 1000), WiFi.localIP().toString().c_str(), /*(int)ESP.getEfuseMac()*/0);
+				(int)(millis() / 1000), WiFi.localIP().toString().c_str(), /*(int)ESP.getEfuc()*/0);
 		udp.write((const uint8_t *)b, strlen(b));
 		udp.endPacket();
 	}
@@ -582,7 +595,7 @@ void loop() {
 		//sendDebugData();
 		char buf[256]; 
 		snprintf(buf, sizeof(buf), "L: %05.3f/%05.3f/%05.3f m:%d err:%d can:%d drop:%d qlen:%d\n", loopTimeAvg.average()/1000.0, loopTimeAvg.min()/1000.0, loopTimeAvg.max()/1000.0, 
-			isrData.mode, isrData.udpErrs, can.pktCount, can.dropped, can.getQueueLen());
+			isrData.mode, isrData.udpErrs, can->pktCount, can->dropped, can->getQueueLen());
 		Serial.print(buf);
 		fd.print(buf);
 	}
