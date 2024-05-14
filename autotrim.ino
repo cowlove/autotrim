@@ -456,8 +456,41 @@ bool wifiTryConnectNO(const char *ap, const char *pw, int seconds = 15) {
 	return WiFi.status() == WL_CONNECTED;
 }
 	
+void processCommand(const char *buf, int r) {
 //static PinPulse pp[] = { PinPulse(pins.relay1), PinPulse(pins.relay2) };
-
+		static LineBuffer line;
+		for (int i = 0; i < r; i++) {
+			int ll = line.add(buf[i]);
+			if (ll) {
+				cmdCount++;
+				//Serial.printf("LINE: %s", line.line);
+				int ms, val, pin, seq;
+				float f;
+				static int lastSeq = 0;
+				if (sscanf(line.line, "trim %f %d", &f, &seq) == 2 ) {
+					setPoint = f;
+					lastSeq = seq;
+				}
+				if (sscanf(line.line, "gain %f %d", &f, &seq) == 2 ) {
+					pid.gain.p = f;
+					lastSeq = seq;
+				}
+				if (sscanf(line.line, "cdi %f", &f) == 1 ) {
+					debugMoveNeedles = f;
+				}
+				if (sscanf(line.line, "canudp %f", &f) == 1 ) {
+					udpCanOut = f;
+				}
+				if (sscanf(line.line, "canserial %f", &f) == 1 ) {
+					canSerial = f;
+				}
+				if (strstr(line.line, "PMRRV")  != NULL) { 
+					Serial2.write((uint8_t *)line.line, strlen(line.line));
+					//Serial.printf("G5: %s", line.line);
+				}
+			}
+		}
+}
 
 void setup() {
 	esp_task_wdt_init(6, true);
@@ -516,9 +549,7 @@ void setup() {
 	
 	espNowMux.registerReadCallback("g5", 
         [](const uint8_t *mac, const uint8_t *data, int len){
-			string s;
-			s.assign((const char *)data, len);
-			Serial.printf("G5 data: %s\n", s.c_str()); 
+			processCommand((char *)data, len);
     });
 
 
@@ -596,39 +627,8 @@ void loop() {
 	
 	int avail;
 	if (0 && (avail = udp.parsePacket()) > 0) {
-		static LineBuffer line;
 		int r = udp.read(buf, min(avail, (int)sizeof(buf)));
-		for (int i = 0; i < r; i++) {
-			int ll = line.add(buf[i]);
-			if (ll) {
-				cmdCount++;
-				//Serial.printf("LINE: %s", line.line);
-				int ms, val, pin, seq;
-				float f;
-				static int lastSeq = 0;
-				if (sscanf(line.line, "trim %f %d", &f, &seq) == 2 ) {
-					setPoint = f;
-					lastSeq = seq;
-				}
-				if (sscanf(line.line, "gain %f %d", &f, &seq) == 2 ) {
-					pid.gain.p = f;
-					lastSeq = seq;
-				}
-				if (sscanf(line.line, "cdi %f", &f) == 1 ) {
-					debugMoveNeedles = f;
-				}
-				if (sscanf(line.line, "canudp %f", &f) == 1 ) {
-					udpCanOut = f;
-				}
-				if (sscanf(line.line, "canserial %f", &f) == 1 ) {
-					canSerial = f;
-				}
-				if (strstr(line.line, "PMRRV")  != NULL) { 
-					Serial2.write((uint8_t *)line.line, strlen(line.line));
-					//Serial.printf("G5: %s", line.line);
-				}
-			}
-		}
+		processCommand((char *)buf, r);
 	}
 
 	static int startupPeriod = 20000;
