@@ -143,7 +143,7 @@ void superSend(const char *b) {
 	}
 #endif
 	espNowMux.send("g5", (uint8_t*)b, strlen(b));
-	Serial.print(b);
+	//Serial.print(b);
 }
 
 struct IsrData {
@@ -446,7 +446,7 @@ void canParse(int id, int len, int timestamp, const char *ibuf) {
 	}
 }
 
-bool wifiTryConnect(const char *ap, const char *pw, int seconds = 15) { 
+bool wifiTryConnectNO(const char *ap, const char *pw, int seconds = 15) { 
 	if (WiFi.status() != WL_CONNECTED) {
 		WiFi.begin(ap, pw);
 		for(int d = 0; d < seconds * 10 && WiFi.status() != WL_CONNECTED; d++) {
@@ -456,11 +456,11 @@ bool wifiTryConnect(const char *ap, const char *pw, int seconds = 15) {
 	return WiFi.status() == WL_CONNECTED;
 }
 	
-static PinPulse pp[] = { PinPulse(pins.relay1), PinPulse(pins.relay2) };
+//static PinPulse pp[] = { PinPulse(pins.relay1), PinPulse(pins.relay2) };
 
 
 void setup() {
-	esp_task_wdt_init(120, true);
+	esp_task_wdt_init(6, true);
 	esp_task_wdt_add(NULL);
 
 	Serial.begin(921600, SERIAL_8N1);
@@ -554,11 +554,6 @@ void loop() {
 		Display::jd.update(false, false);
 	}	
 #endif
-	if (first || digitalRead(pins.button) == 0) { 
-		first = false;
-		pp[0].pulse(1, 1000);
-		pp[1].pulse(1, 2000);
-	} 
 	can->run(pdMS_TO_TICKS(5), 20);
 	
 	if (lastLoopTime != -1) 
@@ -569,21 +564,7 @@ void loop() {
 		can->reset();
 	}
 	
-	if (report.tick()) { 
-		WiFiUDP &udp = udpG90;
-		udp.beginPacket("255.255.255.255", 9000);
-		char b[128];
-		snprintf(b, sizeof(b), "%d %s    " __BASE_FILE__ "   " __DATE__ "   " __TIME__ "   0x%08x\n", 
-				(int)(millis() / 1000), WiFi.localIP().toString().c_str(), /*(int)ESP.getEfuc()*/0);
-		udp.write((const uint8_t *)b, strlen(b));
-		udp.endPacket();
-	}
                         
-
-	
-	for (int n =0; n < sizeof(pp)/sizeof(pp[0]); n++) { 
-		pp[n].run();
-	}
 
 	trimPosAvg.add(analogRead(33));
 	if (pinReportTimer.tick()/* || isrData.forceSend*/) { 
@@ -598,21 +579,6 @@ void loop() {
 			isrData.mode, isrData.udpErrs, can->pktCount, can->dropped, can->getQueueLen());
 		Serial.print(buf);
 		fd.print(buf);
-	}
-
-	if (millis() > nextCmdTime && setPoint != -1) { 
-		float c = pid.add((setPoint - trimPosAvg.average()), trimPosAvg.average(), millis() / 1000.0);
-		if (abs(c) > 200) {
-			c = 200 * c/abs(c);
-		}
-		if (abs(c) > 10) {
-			if (c < 0) {
-				pp[0].pulse(1, abs(c));
-			} else { 
-				pp[1].pulse(1, abs(c));
-			}
-		}
-		nextCmdTime = millis() + (int)abs(c) + 50;  // schedule time for PID to run. 
 	}
 	
 	if (Serial.available()) {
@@ -629,7 +595,7 @@ void loop() {
 	}	
 	
 	int avail;
-	if ((avail = udp.parsePacket()) > 0) {
+	if (0 && (avail = udp.parsePacket()) > 0) {
 		static LineBuffer line;
 		int r = udp.read(buf, min(avail, (int)sizeof(buf)));
 		for (int i = 0; i < r; i++) {
@@ -640,17 +606,6 @@ void loop() {
 				int ms, val, pin, seq;
 				float f;
 				static int lastSeq = 0;
-				if (sscanf(line.line, "pin %d %d %d %d", &pin, &val, &ms, &seq) == 4) { 
-					cmdCount += 100;
-					if (pin >= 0 && pin < sizeof(pp)/sizeof(pp[0]) && seq != lastSeq && ms > 5 && ms <= 500) {
-						pp[pin].pulse(val, ms);
-					}
-					lastSeq = seq;
-					lastCmdTime = micros();
-					lastCmdMs = ms;
-					lastCmdPin = pin;
-					startTrimPos = trimPosAvg.average();
-				}
 				if (sscanf(line.line, "trim %f %d", &f, &seq) == 2 ) {
 					setPoint = f;
 					lastSeq = seq;
@@ -718,8 +673,8 @@ void loop() {
 	}
 	
 
-	avail = udpG90.parsePacket();
-	if (avail > 0) {
+	//avail = udpG90.parsePacket();
+	if (0 && avail > 0) {
 		//Serial.printf("UDP: %d bytes avail\n", avail);
 				static int count = 0;
 		unsigned char buf[1024]; 
