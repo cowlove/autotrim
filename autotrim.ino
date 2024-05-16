@@ -12,20 +12,19 @@
 #include <iterator>
 #include <istream>
 
-#include "RollingLeastSquares.h"
-#include "PidControl.h"
 #include "jimlib.h"
-#include "GDL90Parser.h"
-#include "WaypointNav.h"
+//#include "GDL90Parser.h"
+//#include "WaypointNav.h"
 #include "espNowMux.h"
+#include "reliableStream.h"
 
-using namespace WaypointNav;
+//using namespace WaypointNav;
 //#define LED_PIN 2
 
 //WiFiMulti wifi;
-WiFiUDP udpG90;
-GDL90Parser gdl90;
-GDL90Parser::State state;
+//WiFiUDP udpG90;
+//GDL90Parser gdl90;
+//GDL90Parser::State state;
 
 static float g5KnobValues[6];
 static double hd = -2, vd = -2; // cdi deflections 
@@ -114,7 +113,13 @@ float setPoint = -1;
 int lastCmdTime = 0, lastCmdMs = 0, lastCmdPin = 0;
 float startTrimPos = 0;
 
-RollingAverage<long int,1000> loopTimeAvg;
+//RollingAverage<long int,1000> loopTimeAvg;
+struct DummyLoopTime { 
+	float average() { return -1; }
+	float min() { return -1; }
+	float max() { return -1; }
+	void add(float) {}
+} loopTimeAvg;
 uint64_t lastLoopTime = -1;
 EggTimer serialReportTimer(1000), displayTimer(1000);
 EggTimer pinReportTimer(200), canResetTimer(5000), sl30Heartbeat(1000), sdCardFlush(2000);
@@ -123,6 +128,8 @@ uint64_t nextCmdTime = 0;
 static bool debugMoveNeedles = false;
 
 static bool first = true;
+ReliableStreamESPNow autopilot("G5");
+
 
 // send udp packet multiple times on broadcast address and all addresses in normal EchoUAT wifi range 
 void superSend(const char *b) { 
@@ -142,7 +149,7 @@ void superSend(const char *b) {
 		}
 	}
 #endif
-	espNowMux.send("g5", (uint8_t*)b, strlen(b));
+	autopilot.write(string(b));
 	//Serial.print(b);
 }
 
@@ -242,14 +249,14 @@ CanWrapper *CanWrapper::instancePtr = NULL;
 
 CanWrapper *can = NULL;
 uint8_t canDebugBuf[1024];
-PidControl pid(2);
-static RollingAverage<int,1000> trimPosAvg;
+//PidControl pid(2);
+//static RollingAverage<int,1000> trimPosAvg;
 int canSerial = 0;
 
 void sendDebugData() { 
 	char sbuf[160];				
-	snprintf(sbuf, sizeof(sbuf), "%d %f %s DEBUG\n", 
-		(int)can->pktCount, (float)trimPosAvg.average(), WiFi.localIP().toString().c_str());
+	//snprintf(sbuf, sizeof(sbuf), "%d %f %s DEBUG\n", 
+	//	(int)can->pktCount, (float)trimPosAvg.average(), WiFi.localIP().toString().c_str());
 	//superSend(sbuf);
 	//Serial.printf(sbuf);
 }
@@ -471,10 +478,12 @@ void processCommand(const char *buf, int r) {
 					setPoint = f;
 					lastSeq = seq;
 				}
+#ifdef DISCARD
 				if (sscanf(line.line, "gain %f %d", &f, &seq) == 2 ) {
 					pid.gain.p = f;
 					lastSeq = seq;
 				}
+#endif
 				if (sscanf(line.line, "cdi %f", &f) == 1 ) {
 					debugMoveNeedles = f;
 				}
@@ -544,23 +553,26 @@ void setup() {
 
 	adcAttachPin(pins.ADC);
 	//analogSetCycles(255);
-	pid.setGains(4, 0, 0);
-	pid.finalGain = 1;
-	
+	//pid.setGains(4, 0, 0);
+	//pid.finalGain = 1;
+
+#if 0 	
 	espNowMux.registerReadCallback("g5", 
         [](const uint8_t *mac, const uint8_t *data, int len){
 			processCommand((char *)data, len);
     });
-
+#endif
 
 	can = new CanWrapper();
 	can->onReceive(canParse);
 	can->begin();
 }
+#ifdef DISCARD
 GDL90Parser::State currentState;
-static EggTimer report(2000);
+#endif
+EggTimer report(2000);
 
-
+#ifdef DISCARD
 void fakeApproach(LatLon now, float vlocTrk, float altBug) { 
 	const float gs = 3.0;
 	float tdze = altBug - 200 / 3.281;
@@ -569,6 +581,8 @@ void fakeApproach(LatLon now, float vlocTrk, float altBug) {
 	LatLon tdz = locationBearingDistance(facIntercept, magToTrue(vlocTrk), facDist);
 	ils = new IlsSimulator(tdz, tdze, magToTrue(vlocTrk), gs);
 }
+#endif
+
 
 void loop() {
 	uint64_t now = micros();
@@ -590,14 +604,17 @@ void loop() {
 	if (lastLoopTime != -1) 
 		loopTimeAvg.add(now - lastLoopTime);
 	lastLoopTime = now;
-	
+
 	if (canResetTimer.tick()) {
 		can->reset();
 	}
 	
-                        
+	string s = autopilot.read();
+	if (s.length()) { 
+		processCommand(s.c_str(), s.length());
+	}
 
-	trimPosAvg.add(analogRead(33));
+	//trimPosAvg.add(analogRead(33));
 	if (pinReportTimer.tick()/* || isrData.forceSend*/) { 
 		isrData.forceSend = false;
 		//Serial.printf("%08d %d\n", (int)millis(), isrData.mode);
@@ -672,7 +689,7 @@ void loop() {
 		//Serial.print(s.c_str());
 	}
 	
-
+#ifdef DISCARD
 	//avail = udpG90.parsePacket();
 	if (0 && avail > 0) {
 		//Serial.printf("UDP: %d bytes avail\n", avail);
@@ -715,7 +732,7 @@ void loop() {
 
 		}
 	}
-	
+#endif
 	static EggTimer g5Timer(100);
 
 	if (g5Timer.tick()) { 
@@ -731,6 +748,7 @@ void loop() {
 			//Serial.print(s.c_str());
 	
 		}
+#ifdef DISCARD
 		if (isrData.mode == 5) {
 			LatLon now(currentState.lat, currentState.lon); 
 			if (ils == NULL) {
@@ -760,6 +778,7 @@ void loop() {
 			delete ils;
 			ils = NULL;
 		}
+#endif
 	}
 
 	canSerial = udpCanOut = (isrData.mode == 7);
@@ -773,9 +792,11 @@ void loop() {
 
 
 class ESP32sim_autotrim : ESP32sim_Module { 
+#ifdef DISCARD
 	ifstream gdl90file; 
 	ifstream trackSimFile;
 	WaypointNav::WaypointSequencer tSim = WaypointNav::WaypointSequencer(trackSimFile);
+#endif
 	int last_us = 0;	
 	bool makeKml = false;
 	IntervalTimer hz100 = IntervalTimer(100/*msec*/);
@@ -784,6 +805,7 @@ class ESP32sim_autotrim : ESP32sim_Module {
 	void parseArg(char **&a, char **la) override {
 		printf("at parse arg\n");
 		if (strcmp(*a, "--kml") == 0) makeKml = true;
+#ifdef DISCARD
 		if (strcmp(*a, "--gdltest") == 0) {
 			ifstream f = ifstream(*(++a), ios_base::in | ios_base::binary);
 			while(f) { 
@@ -801,12 +823,14 @@ class ESP32sim_autotrim : ESP32sim_Module {
 		}
 		if (strcmp(*a, "--tracksim") == 0) 
 			trackSimFile = ifstream(*(++a), ios_base::in | ios_base::binary);
+#endif
 	}
 	void setup() override {}
 			
 	void loop() override {
 		if (!hz100.tick(millis())) 
 			return;
+#ifdef DISCARD
 		if (gdl90file) {
 			std::vector<unsigned char> data(300);
 			gdl90file.read((char *)data.data(), data.size());	
@@ -826,7 +850,7 @@ class ESP32sim_autotrim : ESP32sim_Module {
 			g5KnobValues[2] = tSim.inputs["ALTBUG"];
 			g5KnobValues[4] = tSim.inputs["VLOCBUG"] * M_PI/180;
 			LatLonAlt p = tSim.wptTracker.curPos;
-				GDL90Parser::State s;
+			GDL90Parser::State s;
 			if (p.valid) { 
 				s.lat = p.loc.lat;
 				s.lon = p.loc.lon;
@@ -844,17 +868,17 @@ class ESP32sim_autotrim : ESP32sim_Module {
 				buf.resize(128);
 				buf.resize(gdl90.packMsg10(buf.data(), buf.size(), s));
 				ESP32sim_udpInput(4000, buf);
-
 			}
 			/*printf("%3d %d %d %+4.1f %+4.1f %+11.6f, %+11.6f a:%4.0f t:%4.1f r:%4.0f\n", tSim.sim.wayPointCount, tSim.sim.waypointPassed, isrData.mode,
 				hd, vd, s.lat, s.lon, (float)s.alt, s.track, 
 				distance(p.loc, tSim.sim.activeWaypoint.loc));
 			*/
+#endif
 		}	
 	}  
 		
 	void done() override{
-		printf("gdl90 msgs %d errors %d\n", gdl90.msgCount, gdl90.errCount);
+		//printf("gdl90 msgs %d errors %d\n", gdl90.msgCount, gdl90.errCount);
 		exit(0);
 	} 
 } autotrim;
