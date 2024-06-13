@@ -122,7 +122,7 @@ struct DummyLoopTime {
 } loopTimeAvg;
 uint64_t lastLoopTime = -1;
 EggTimer serialReportTimer(1000), displayTimer(1000);
-EggTimer pinReportTimer(200), canResetTimer(5000), sl30Heartbeat(1000), sdCardFlush(2000);
+EggTimer pinReportTimer(50), canResetTimer(5000), sl30Heartbeat(1000), sdCardFlush(2000);
 
 uint64_t nextCmdTime = 0;
 static bool debugMoveNeedles = false;
@@ -337,10 +337,21 @@ void canParse(int id, int len, int timestamp, const char *ibuf) {
 	int mpSize = len;
 	static char obuf[1024];
 
+#if 0 	
+	for (int i = 0; i < len / 4; i++) { 
+		float f = floatFromBinary(&ibuf[i * 4]);
+		if (f >= -100 & f <= -50  ) { 
+			Serial.printf("found float %f between 1000-2000 at byte %d, packet:\n", f, i * 4);
+			canToText(ibuf, lastId, mpSize, millis(), obuf, sizeof(obuf));
+			Serial.print(obuf);
+		}
+	}
+#endif
 	if (canSerial) {
 		canToText(ibuf, lastId, mpSize, millis(), obuf, sizeof(obuf));
 		Serial.print(obuf);
 	}
+
 	if ((lastId == 0x18882100 || lastId == 0x188c2100) && ibuf[0] == 0xdd && ibuf[1] == 0x00 && mpSize == 60 && ibuf[15] & 0x40) {
 		float thresh = .01;
 		try {
@@ -369,7 +380,7 @@ void canParse(int id, int len, int timestamp, const char *ibuf) {
 		}
 	} 	
 	if (lastId == 0x18882100 && ibuf[0] == 0xdd && ibuf[1] == 0x00 && mpSize == 60) {
-		float thresh = .001;
+		float thresh = 0.0;
 		try {
 			float pitch = floatFromBinary(&ibuf[20]);
 			float roll = floatFromBinary(&ibuf[24]);
@@ -403,23 +414,34 @@ void canParse(int id, int len, int timestamp, const char *ibuf) {
 			isrData.exceptions++;
 		}
 	}
+	if (lastId == 0x18882100 && ibuf[0] == 0xdd && ibuf[1] == 0x0a && mpSize >= 32) {
+		try {
+			float palt = floatFromBinary(&ibuf[28]);
+			isrData.palt = palt;
+			sendUdpCan("PALT=%f", palt);
+			Serial.printf("PALT=%f\n", palt);
+		} catch(...) {
+			isrData.ias = isrData.tas = isrData.palt = 0; 
+			isrData.exceptions++;
+		}
+	}
 	if (lastId == 0x18882100 && ibuf[0] == 0xdd && ibuf[1] == 0x0a && mpSize >= 44) {
 		float thresh = .1;
 		try {
 			float ias = floatFromBinary(&ibuf[12]); 
 			float tas = floatFromBinary(&ibuf[16]);
-			float palt = floatFromBinary(&ibuf[24]);
+			//float palt = floatFromBinary(&ibuf[24]);
 			isrData.timestamp = millis();
 			if (abs(ias - lastSent.ias) > thresh || 
-				abs(tas - lastSent.tas) > thresh || 
-				abs(palt - lastSent.palt) > thresh) { 
-				sendUdpCan("IAS=%f TAS=%f PALT=%f", ias / 0.5144, tas / 0.5144, palt / 3.2808);
+				abs(tas - lastSent.tas) > thresh /*|| 
+				abs(palt - lastSent.palt) > thresh*/) { 
+				sendUdpCan("IAS=%f TAS=%f", ias / 0.5144, tas / 0.5144);
 				lastSent.ias = ias;
 				lastSent.tas = tas;
-				lastSent.palt = palt;
+				//lastSent.palt = palt;
 			}
 			isrData.ias = ias; 
-			isrData.palt = palt;
+			//isrData.palt = palt;
 			isrData.tas = tas;
 		} catch(...) {
 			isrData.ias = isrData.tas = isrData.palt = 0; 
@@ -434,6 +456,7 @@ void canParse(int id, int len, int timestamp, const char *ibuf) {
 			int knobSel = ibuf[2];					
 			isrData.knobVal = knobVal;
 			isrData.knobSel = knobSel;
+			Serial.printf("KSEL=%d KVAL=%f\n", knobSel, knobVal);
 			sendUdpCan("KSEL=%d KVAL=%f\n", knobSel, knobVal);
 			if (knobSel > 0 && knobSel < sizeof(g5KnobValues)/sizeof(g5KnobValues[0]))
 				g5KnobValues[knobSel] = knobVal;
@@ -448,14 +471,14 @@ void canParse(int id, int len, int timestamp, const char *ibuf) {
 
 	static float lastKnobVal = 0;
 	static uint64_t lastKnobMillis = 0;
-	if ((isrData.knobSel == 1/*hdg*/ || isrData.knobSel == 0/*altimeter*/)  && isrData.knobVal != lastKnobVal) { 
+	if ((isrData.knobSel == 1/*hdg*/)  && isrData.knobVal != lastKnobVal) { 
 		if (millis() - lastKnobMillis > 500) 
 			isrData.mode = 0;
 		lastKnobMillis = millis();
 		double delta = isrData.knobVal - lastKnobVal;
 		bool oneDegree = abs(delta) < 1.5/180*M_PI && abs(delta) > 0.5/180*M_PI;
 		bool evenMode = (isrData.mode & 0x1) == 0;
-		if (isrData.knobSel == 0) { // for debugging, use altimeter adjustment for knob input too 
+		if (false && isrData.knobSel == 0) { // for debugging, use altimeter adjustment for knob input too 
 			oneDegree = abs(delta) < 35 && abs(delta) > 30;
 		}
 		if (oneDegree && ((delta > 0 && evenMode) || (delta < 0 && !evenMode))) {
@@ -504,7 +527,7 @@ void processCommand(const char *buf, int r) {
 			int ll = line.add(buf[i]);
 			if (ll) {
 				cmdCount++;
-				//Serial.printf("LINE: %s", line.line);
+				Serial.printf("LINE: %s", line.line);
 				int ms, val, pin, seq;
 				float f;
 				static int lastSeq = 0;
@@ -634,7 +657,25 @@ void loop() {
 	}	
 #endif
 	can->run(pdMS_TO_TICKS(5), 5);
+
 	
+	while (Serial.available()) { 
+		static char buf[512];
+		int n = Serial.read(buf, sizeof(buf));
+		processCommand(buf, n);
+	}
+
+	while (Serial2.available()) { 
+		static LineBuffer lb;
+		static char buf[512];
+		int n = Serial2.read(buf, sizeof(buf));
+		Serial.printf("Serial read %d bytes\n", n);
+		lb.add(buf, n, [](const char *line) {
+			sendUdpCan("NMEA=%s", line);
+			Serial.printf("NMEA: %s\n", line);
+		});
+
+	}
 	if (lastLoopTime != -1) 
 		loopTimeAvg.add(now - lastLoopTime);
 	lastLoopTime = now;

@@ -2,7 +2,7 @@
 #BOARD=esp32doit-devkit-v1
 #BOARD=heltec_wifi_kit_32
 BOARD=nodemcu-32s
-VERBOSE=1
+#VERBOSE=1
 
 GIT_VERSION := "$(shell git describe --abbrev=4 --dirty --always --tags)"
 CHIP=esp32
