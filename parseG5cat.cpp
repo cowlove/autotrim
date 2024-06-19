@@ -45,6 +45,10 @@ float getFloat(int *b) {
 	return f;
 }
 
+static float mi = 500;
+static float ma = 1000;
+static float lastInteresting = 0;
+
 bool doline(istream &i)  {
 	string line;
 	if (!getline(i, line)) 
@@ -56,25 +60,43 @@ bool doline(istream &i)  {
 		return false;
 
 	vector<string> words = split(line.c_str(), " ");
-	if (words.size() < 4 || dlen != 40)
+	if (words.size() < 4)
 		return false;
 
-	for (auto i = words.begin() + 4; i != words.end(); i++) { 
+	float flts[128];
+	uint8_t bytes[512];
+	bool first = true;
+	bool interesting = false;
+	for (int i = 0; i < words.size() - 4; i++) { 
 		int b[8];
-		float mi = 600;
-		float ma = 900;
-		if (sscanf(i->c_str(), "%02x%02x%02x%02x%02x%02x%02x%02x", b,b+1,b+2,b+3,b+4,b+5,b+6,b+7) == 8) { 
+		if (sscanf(words[i + 4].c_str(), "%02x%02x%02x%02x%02x%02x%02x%02x", b,b+1,b+2,b+3,b+4,b+5,b+6,b+7) == 8) { 
+			if (first) { 
+				printf("%8.3f %02d ", t, dlen);
+			}
 			float f1 = getFloat(b);
 			float f2 = getFloat(b + 4);
-			int idx = (int)(i - words.begin() - 4) * 8;
-			if (0 && f1 >= mi && f1 <= ma) { 
-				printf("got float %f at offset %d in line %s\n", f1, (int)(i - words.begin()) * 2, line.c_str());
-			}
-
-			printf("%02d: %+09.3f %02d: %+09.3f ", idx, f1, idx + 4, f2);
+			flts[i * 2] = f1;
+			flts[i * 2 + 1] = f2;
+			memcpy(bytes + i * 8, b, 8);
 		}
+		first = false;
+	}
+	for (int i = 0; i < (words.size() - 4) * 2; i++) {
+			printf("%02d:%+09.3f%c ", i, flts[i], (flts[i] >= mi && flts[i] <= ma) ? 'X' : ' ');
+			if (flts[i] >= mi && flts[i] <= ma)
+				interesting = true;
+	}
+
+	if (bytes[0] == 0xdd && bytes[1] == 0x0a && dlen == 40) {
+		mi = flts[7] - 2;
+		ma = flts[7] + 2;
 	}
 	cout << endl;
+	if (true && interesting) {
+		printf("XXX %08.3f", t - lastInteresting);
+		lastInteresting = t;
+		cout << line << endl;
+	}
 	return true;
 }
 

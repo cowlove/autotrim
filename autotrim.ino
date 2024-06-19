@@ -352,6 +352,20 @@ void canParse(int id, int len, int timestamp, const char *ibuf) {
 		Serial.print(obuf);
 	}
 
+	if ((lastId == 0x18882100 || lastId == 0x188c2100) && ibuf[0] == 0xc1 && ibuf[1] == 0x0b && mpSize == 84) {
+		float thresh = .01;
+		try {
+			float palt = floatFromBinary(&ibuf[64]);
+			if (abs(palt - lastSent.palt) > thresh) { 
+				sendUdpCan("PALT=%.5f\n", palt);
+				lastSent.palt = palt;
+			}
+			isrData.palt = palt;
+		} catch(...) {
+			//isrData.palt = 0;
+		}
+	} 
+
 	if ((lastId == 0x18882100 || lastId == 0x188c2100) && ibuf[0] == 0xdd && ibuf[1] == 0x00 && mpSize == 60 && ibuf[15] & 0x40) {
 		float thresh = .01;
 		try {
