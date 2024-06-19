@@ -414,6 +414,7 @@ void canParse(int id, int len, int timestamp, const char *ibuf) {
 			isrData.exceptions++;
 		}
 	}
+	/*
 	if (lastId == 0x18882100 && ibuf[0] == 0xdd && ibuf[1] == 0x0a && mpSize >= 32) {
 		try {
 			float palt = floatFromBinary(&ibuf[28]);
@@ -425,23 +426,24 @@ void canParse(int id, int len, int timestamp, const char *ibuf) {
 			isrData.exceptions++;
 		}
 	}
-	if (lastId == 0x18882100 && ibuf[0] == 0xdd && ibuf[1] == 0x0a && mpSize >= 44) {
+	*/
+	if (lastId == 0x18882100 && ibuf[0] == 0xdd && ibuf[1] == 0x0a && mpSize >= 40) {
 		float thresh = .1;
 		try {
 			float ias = floatFromBinary(&ibuf[12]); 
 			float tas = floatFromBinary(&ibuf[16]);
-			//float palt = floatFromBinary(&ibuf[24]);
+			float palt = floatFromBinary(&ibuf[28]);
 			isrData.timestamp = millis();
 			if (abs(ias - lastSent.ias) > thresh || 
-				abs(tas - lastSent.tas) > thresh /*|| 
-				abs(palt - lastSent.palt) > thresh*/) { 
-				sendUdpCan("IAS=%f TAS=%f", ias / 0.5144, tas / 0.5144);
+				abs(tas - lastSent.tas) > thresh || 
+				abs(palt - lastSent.palt) > thresh) { 
+				sendUdpCan("IAS=%f TAS=%f PALT=%f", ias / 0.5144, tas / 0.5144, palt);
 				lastSent.ias = ias;
 				lastSent.tas = tas;
-				//lastSent.palt = palt;
+				lastSent.palt = palt;
 			}
 			isrData.ias = ias; 
-			//isrData.palt = palt;
+			isrData.palt = palt;
 			isrData.tas = tas;
 		} catch(...) {
 			isrData.ias = isrData.tas = isrData.palt = 0; 
