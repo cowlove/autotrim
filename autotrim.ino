@@ -352,7 +352,8 @@ void canParse(int id, int len, int timestamp, const char *ibuf) {
 		Serial.print(obuf);
 	}
 
-	if ((lastId == 0x18882100 || lastId == 0x188c2100) && ibuf[0] == 0xc1 && ibuf[1] == 0x0b && mpSize == 84) {
+	if ((lastId == 0x18882100 || lastId == 0x188c2100) && 
+		ibuf[0] == 0xc1 && ibuf[1] == 0x0b && mpSize == 84) {
 		float thresh = .01;
 		try {
 			float palt = floatFromBinary(&ibuf[64]);
@@ -551,12 +552,6 @@ void processCommand(const char *buf, int r) {
 					setPoint = f;
 					lastSeq = seq;
 				}
-#ifdef DISCARD
-				if (sscanf(line.line, "gain %f %d", &f, &seq) == 2 ) {
-					pid.gain.p = f;
-					lastSeq = seq;
-				}
-#endif
 				if (sscanf(line.line, "cdi %f", &f) == 1 ) {
 					debugMoveNeedles = f;
 				}
@@ -591,39 +586,6 @@ void setup() {
 	pinMode(pins.button, INPUT_PULLUP);
 //	pinMode(3,INPUT);
 
-#ifdef XDISPLAY
-	Display::jd.begin();
-	Display::jd.clear();
-	Display::jd.forceUpdate();
-#endif
-
-#if 0 
-	WiFi.begin("Ping-582B", "");
-	//wifi.addAP("Flora_2GEXT", "maynards");
-	//wifi.addAP("Team America", "51a52b5354");
-	//wifi.addAP("ChloeNet", "niftyprairie7");
-	uint64_t startms = millis();
-	Serial.printf("Waiting for wifi...\n");
-	while (digitalRead(pins.button) != 0 && WiFi.status() != WL_CONNECTED) {
-		//wifi.run();
-		delay(10);
-	}
-
-	if (WiFi.status() == WL_CONNECTED) {
-		Serial.printf("connected\n");
-		udp.begin(udpPortIn);
-		udpG90.begin(4000);
-		ArduinoOTA.begin();
-		ArduinoOTA.onStart([]() {
-			esp_task_wdt_delete(NULL);
-			//can->reset();
-			Serial.println("Start");
-			otaInProgress = true;
-		});
-		//openLogFile("CAN%03d.TXT");
-	} 
-#endif
-
 	adcAttachPin(pins.ADC);
 	//analogSetCycles(255);
 	//pid.setGains(4, 0, 0);
@@ -640,22 +602,7 @@ void setup() {
 	can->onReceive(canParse);
 	can->begin();
 }
-#ifdef DISCARD
-GDL90Parser::State currentState;
-#endif
 EggTimer report(2000);
-
-#ifdef DISCARD
-void fakeApproach(LatLon now, float vlocTrk, float altBug) { 
-	const float gs = 3.0;
-	float tdze = altBug - 200 / 3.281;
-	LatLon facIntercept = locationBearingDistance(now, currentState.track, 1600);
-	float facDist = 1600 + (currentState.alt - tdze) / tan(gs * M_PI/180);
-	LatLon tdz = locationBearingDistance(facIntercept, magToTrue(vlocTrk), facDist);
-	ils = new IlsSimulator(tdz, tdze, magToTrue(vlocTrk), gs);
-}
-#endif
-
 
 void loop() {
 	uint64_t now = micros();
@@ -666,12 +613,6 @@ void loop() {
 		can->reset();
 		return;
 	}
-#ifdef XDISPLAY
-	if (displayTimer.tick()) { 
-		Display::sec = millis() / 1000.0;
-		Display::jd.update(false, false);
-	}	
-#endif
 	can->run(pdMS_TO_TICKS(5), 5);
 
 	
@@ -780,50 +721,6 @@ void loop() {
 		//Serial.print(s.c_str());
 	}
 	
-#ifdef DISCARD
-	//avail = udpG90.parsePacket();
-	if (0 && avail > 0) {
-		//Serial.printf("UDP: %d bytes avail\n", avail);
-				static int count = 0;
-		unsigned char buf[1024]; 
-		int recsize = udpG90.read(buf, min(avail,(int)sizeof(buf)));
-		for (int i = 0; i < recsize; i++) {  
-			gdl90.add(buf[i]);
-			GDL90Parser::State s = gdl90.getState();
-			if (s.valid && s.updated) {
-				currentState = s;
-				int vvel = (signed short)(s.vvel * 64);
-				float brg = 0, range = 0, hat = 0;
-				if (ils != NULL) { 
-					LatLon target = (ils != NULL) ? ils->tdzLocation : LatLon(47.90558443637955, -122.10252512643517);
-					LatLon here(s.lat, s.lon);
-					brg = bearing(here, target);
-					range = distance(here, target);
-					hat = s.alt - ils->tdze;
-				}
-				count++;
-				Serial.printf("%08.2f pos %+11.6f %+11.6f track %6.1f, ils-brg %6.1f ils-range %5.0f ils-hat %5.0f palt %5d:, galt %5d, vvel %+4d, hvel %3d CDI:%+.1f GS:%+.1f\n", 
-						millis()/1000.0, s.lat, s.lon, s.track, brg, range, hat, (s.palt * 25) - 1000, (int) (s.alt * FEET_PER_METER), 
-					vvel, s.hvel, hd, vd);		
-			}
-		}
-		if (fd == true) { 
-			char obuf[1024];
-			sprintf(obuf, "%s", "GDL90:");
-			int maxB = min((int)(sizeof(obuf) - 8)/2, recsize);
-			for (int i = 0; i < maxB; i++) { 
-				sprintf(obuf + 6 + i * 2, "%02x", buf[i]);
-			}
-			sprintf(obuf + 6 + maxB * 2, "\n");
-			fd.write(obuf, strlen(obuf));
-			if (sdCardFlush.tick()) 
-				fd.flush();
-			//Serial.printf("%08d ", millis());	
-			//Serial.print(obuf);	
-
-		}
-	}
-#endif
 	static EggTimer g5Timer(100);
 
 	if (g5Timer.tick()) { 
@@ -837,41 +734,9 @@ void loop() {
 			std::string s = sl30.setCDI(hd, vd);
 			Serial2.print(s.c_str());
 			//Serial.print(s.c_str());
-	
 		}
-#ifdef DISCARD
-		if (isrData.mode == 5) {
-			LatLon now(currentState.lat, currentState.lon); 
-			if (ils == NULL) {
-				float vlocTrk = g5KnobValues[4] * 180/M_PI;
-				float altBug = g5KnobValues[2];
-				if (vlocTrk != 0) { 
-					fakeApproach(now, vlocTrk, altBug);
-				} else { 
-					Approach *a = findBestApproach(now);
-					if (a != NULL)
-						ils = new IlsSimulator(LatLon(a->lat, a->lon), a->tdze / 3.281, magToTrue(a->fac), a->gs);
-				}
-				if (ils != NULL) { 
-					Serial.print("Started ILS, ");
-					Serial.println(ils->toString().c_str());
-				}
-			}
-			if (ils != NULL) { 
-				ils->setCurrentLocation(now, currentState.alt);
-				hd = ils->cdiPercent() * 2.0;
-				vd = ils->gsPercent() * 2.0;
-				std::string s = sl30.setCDI(hd, vd);
-				Serial2.print(s.c_str());
-				//Serial.print(s.c_str());
-			}
-		} else if (ils != NULL) {
-			delete ils;
-			ils = NULL;
-		}
-#endif
 	}
-	canSerial = udpCanOut = (isrData.mode == 7);
+	//canSerial = udpCanOut = (isrData.mode == 7);
 	delayMicroseconds(1);
 }
 
@@ -895,76 +760,15 @@ class ESP32sim_autotrim : ESP32sim_Module {
 	void parseArg(char **&a, char **la) override {
 		printf("at parse arg\n");
 		if (strcmp(*a, "--kml") == 0) makeKml = true;
-#ifdef DISCARD
-		if (strcmp(*a, "--gdltest") == 0) {
-			ifstream f = ifstream(*(++a), ios_base::in | ios_base::binary);
-			while(f) { 
-				gdl90.add(f.get());
-			}
-			done();
-			exit(0);
-		}
-		if (strcmp(*a, "--gdl") == 0) 
-			gdl90file = ifstream(*(++a), ios_base::in | ios_base::binary);
-		if (strcmp(*a, "--gdlseek") == 0) {
-			int pos = 0;
-			sscanf(*(++a), "%d", &pos);
-			gdl90file.seekg(pos);
-		}
-		if (strcmp(*a, "--tracksim") == 0) 
-			trackSimFile = ifstream(*(++a), ios_base::in | ios_base::binary);
-#endif
+		if (strcmp(*a, "--canfile") == 0) CAN.setSimFile(*(++a)); 
+		if (strcmp(*a, "--canserial") == 0) canSerial = 1;
 	}
 	void setup() override {}
 			
 	void loop() override {
+		CAN.run();
 		if (!hz100.tick(millis())) 
 			return;
-#ifdef DISCARD
-		if (gdl90file) {
-			std::vector<unsigned char> data(300);
-			gdl90file.read((char *)data.data(), data.size());	
-			int n = gdl90file.gcount();
-			if (gdl90file && n > 0) { 
-				ESP32sim_udpInput(4000, data);
-			}
-		}	
-		if (trackSimFile || trackSimFile.eof()) {
-			tSim.run(hz100.interval / 1000.0);
-			if (tSim.autoPilotOn) { 
-				tSim.wptTracker.setCDI(hd, vd, tSim.decisionHeight);
-			}
-			if (tSim.inputs.find("MODE") != tSim.inputs.end());
-				isrData.mode = tSim.inputs["MODE"];
-			g5KnobValues[1] = tSim.inputs["HDGBUG"] * M_PI/180;
-			g5KnobValues[2] = tSim.inputs["ALTBUG"];
-			g5KnobValues[4] = tSim.inputs["VLOCBUG"] * M_PI/180;
-			LatLonAlt p = tSim.wptTracker.curPos;
-			GDL90Parser::State s;
-			if (p.valid) { 
-				s.lat = p.loc.lat;
-				s.lon = p.loc.lon;
-				s.alt = p.alt;
-				s.track = tSim.wptTracker.steerHdg;
-				s.vvel = tSim.wptTracker.vvel;
-				s.hvel = tSim.wptTracker.speed;
-				s.palt = (p.alt + 1000) / 25;
-				loopcount++;
-
-				WiFiUDP::InputData buf;
-				buf.resize(128);
-				buf.resize(gdl90.packMsg11(buf.data(), buf.size(), s));
-				ESP32sim_udpInput(4000, buf);
-				buf.resize(128);
-				buf.resize(gdl90.packMsg10(buf.data(), buf.size(), s));
-				ESP32sim_udpInput(4000, buf);
-			}
-			/*printf("%3d %d %d %+4.1f %+4.1f %+11.6f, %+11.6f a:%4.0f t:%4.1f r:%4.0f\n", tSim.sim.wayPointCount, tSim.sim.waypointPassed, isrData.mode,
-				hd, vd, s.lat, s.lon, (float)s.alt, s.track, 
-				distance(p.loc, tSim.sim.activeWaypoint.loc));
-			*/
-#endif
-		}	
 	}  
 		
 	void done() override{
