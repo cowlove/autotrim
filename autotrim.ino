@@ -122,7 +122,7 @@ struct DummyLoopTime {
 } loopTimeAvg;
 uint64_t lastLoopTime = -1;
 EggTimer serialReportTimer(1000), displayTimer(1000);
-EggTimer pinReportTimer(50), canResetTimer(5000), sl30Heartbeat(1000), sdCardFlush(2000);
+EggTimer pinReportTimer(100), canResetTimer(5000), sl30Heartbeat(1000), sdCardFlush(2000);
 
 uint64_t nextCmdTime = 0;
 static bool debugMoveNeedles = false;
@@ -352,23 +352,27 @@ void canParse(int id, int len, int timestamp, const char *ibuf) {
 		Serial.print(obuf);
 	}
 
+
+#if 0 
+	// maybe is GPS altitude? 
 	if ((lastId == 0x18882100 || lastId == 0x188c2100) && 
 		ibuf[0] == 0xc1 && ibuf[1] == 0x0b && mpSize == 84) {
-		float thresh = .01;
+		float thresh = 0.1;
 		try {
 			float palt = floatFromBinary(&ibuf[64]);
-			if (abs(palt - lastSent.palt) > thresh) { 
+			if (abs(palt - lastSent.palt) > thresh && palt > 200) { 
 				sendUdpCan("PALT=%.5f\n", palt);
 				lastSent.palt = palt;
+				isrData.palt = palt;
 			}
-			isrData.palt = palt;
 		} catch(...) {
 			//isrData.palt = 0;
 		}
 	} 
+#endif
 
 	if ((lastId == 0x18882100 || lastId == 0x188c2100) && ibuf[0] == 0xdd && ibuf[1] == 0x00 && mpSize == 60 && ibuf[15] & 0x40) {
-		float thresh = .01;
+		float thresh = 0.001;
 		try {
 			float magHdg = floatFromBinary(&ibuf[16]);
 			if (abs(magHdg - lastSent.magHdg) > thresh) { 
@@ -381,7 +385,7 @@ void canParse(int id, int len, int timestamp, const char *ibuf) {
 		}
 	} 
 	if ((lastId == 0x18882100 || lastId == 0x188c2100) && ibuf[0] == 0xdd && ibuf[1] == 0x00 && mpSize == 60 && ibuf[15] & 0x20) {
-		float thresh = .01;
+		float thresh = 0.001;
 		try {
 			float magTrack = floatFromBinary(&ibuf[16]);
 			if (abs(magTrack - lastSent.magTrack) > thresh) {   
@@ -395,7 +399,7 @@ void canParse(int id, int len, int timestamp, const char *ibuf) {
 		}
 	} 	
 	if (lastId == 0x18882100 && ibuf[0] == 0xdd && ibuf[1] == 0x00 && mpSize == 60) {
-		float thresh = 0.0;
+		float thresh = 0.001;
 		try {
 			float pitch = floatFromBinary(&ibuf[20]);
 			float roll = floatFromBinary(&ibuf[24]);
@@ -415,6 +419,7 @@ void canParse(int id, int len, int timestamp, const char *ibuf) {
 		}
 		//sendCanData(false);
 	}
+#if 0 
 	if (lastId == 0x18882100 && ibuf[0] == 0xdc && ibuf[1] == 0x02 && mpSize >= 16) {
 		float thresh = .01;
 		try {
@@ -429,6 +434,7 @@ void canParse(int id, int len, int timestamp, const char *ibuf) {
 			isrData.exceptions++;
 		}
 	}
+#endif
 	/*
 	if (lastId == 0x18882100 && ibuf[0] == 0xdd && ibuf[1] == 0x0a && mpSize >= 32) {
 		try {
@@ -443,7 +449,7 @@ void canParse(int id, int len, int timestamp, const char *ibuf) {
 	}
 	*/
 	if (lastId == 0x18882100 && ibuf[0] == 0xdd && ibuf[1] == 0x0a && mpSize >= 40) {
-		float thresh = .1;
+		float thresh = 0.0;
 		try {
 			float ias = floatFromBinary(&ibuf[12]); 
 			float tas = floatFromBinary(&ibuf[16]);
@@ -736,7 +742,7 @@ void loop() {
 			//Serial.print(s.c_str());
 		}
 	}
-	//canSerial = udpCanOut = (isrData.mode == 7);
+	canSerial = udpCanOut = (isrData.mode == 7);
 	delayMicroseconds(1);
 }
 
