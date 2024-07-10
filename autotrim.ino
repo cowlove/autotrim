@@ -122,7 +122,7 @@ struct DummyLoopTime {
 } loopTimeAvg;
 uint64_t lastLoopTime = -1;
 EggTimer serialReportTimer(1000), displayTimer(1000);
-EggTimer pinReportTimer(100), canResetTimer(5000), sl30Heartbeat(1000), sdCardFlush(2000);
+EggTimer pinReportTimer(500), canResetTimer(5000), sl30Heartbeat(1000), sdCardFlush(2000);
 
 uint64_t nextCmdTime = 0;
 static bool debugMoveNeedles = false;
@@ -165,6 +165,7 @@ struct IsrData {
 	int udpErrs;
 } isrData, lastSent;
 
+float knobValues[10];
 
 class CanWrapper {
 	//Mutex canMutex;
@@ -271,11 +272,18 @@ void sendUdpCan(const char *format, ...) {
 }
 
 void sendCanData() { 
-	char sbuf[160];				
+	char sbuf[256];				
 	int age = millis() - isrData.timestamp;
-	snprintf(sbuf, sizeof(sbuf), "%+06.3f %+06.3f %+06.3f %+06.3f %+06.3f %+06.3f %+06.3f %d %+06.3f %d %d CAN\n", 
-		isrData.pitch, isrData.roll, isrData.magHdg, isrData.magTrack, isrData.ias, isrData.tas, 
-		isrData.palt, isrData.knobSel, isrData.knobVal, age, isrData.mode);
+	snprintf(sbuf, sizeof(sbuf),
+		"P=%f R=%f HDG=%f TRK=%f IAS=%f TAS=%f PALT=%f MODE=%f "
+		"KNOB0=%f KNOB1=%f KNOB2=%f\n",
+		isrData.pitch * 180 / M_PI, isrData.roll * 180 / M_PI, 
+		isrData.magHdg * 180 / M_PI, isrData.magTrack * 180 / M_PI, 
+		isrData.ias / MPS_PER_KNOT, isrData.tas / MPS_PER_KNOT, 
+		isrData.palt, isrData.mode, knobValues[0], knobValues[1], knobValues[2]);
+	//snprintf(sbuf, sizeof(sbuf), "%+06.3f %+06.3f %+06.3f %+06.3f %+06.3f %+06.3f %+06.3f %d %+06.3f %d %d CAN\n", 
+	//	isrData.pitch, isrData.roll, isrData.magHdg, isrData.magTrack, isrData.ias, isrData.tas, 
+	//	isrData.palt, isrData.knobSel, isrData.knobVal, age, isrData.mode);
 	superSend(sbuf);
 	lastSent = isrData;
 	fd.write(sbuf, strlen(sbuf));
@@ -458,7 +466,8 @@ void canParse(int id, int len, int timestamp, const char *ibuf) {
 			if (abs(ias - lastSent.ias) > thresh || 
 				abs(tas - lastSent.tas) > thresh || 
 				abs(palt - lastSent.palt) > thresh) { 
-				sendUdpCan("IAS=%f TAS=%f PALT=%f\n", ias / 0.5144, tas / 0.5144, palt);
+				sendUdpCan("IAS=%f TAS=%f PALT=%f\n", ias / MPS_PER_KNOT, 
+				tas / MPS_PER_KNOT, palt);
 				lastSent.ias = ias;
 				lastSent.tas = tas;
 				lastSent.palt = palt;
@@ -479,8 +488,10 @@ void canParse(int id, int len, int timestamp, const char *ibuf) {
 			int knobSel = ibuf[2];					
 			isrData.knobVal = knobVal;
 			isrData.knobSel = knobSel;
-			Serial.printf("KSEL=%d KVAL=%f\n", knobSel, knobVal);
-			sendUdpCan("KSEL=%d KVAL=%f\n", knobSel, knobVal);
+			if (knobSel >= 0 && knobSel < sizeof(knobValues)/sizeof(knobValues[0]))
+				knobValues[knobSel] = knobVal;
+			Serial.printf("KNOB%d=%f\n", knobSel, knobVal);
+			sendUdpCan("KNOB%d=%f\n", knobSel, knobVal);
 			if (knobSel > 0 && knobSel < sizeof(g5KnobValues)/sizeof(g5KnobValues[0]))
 				g5KnobValues[knobSel] = knobVal;
 		} catch(...) {
