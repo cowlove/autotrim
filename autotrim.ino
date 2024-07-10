@@ -275,7 +275,7 @@ void sendCanData() {
 	char sbuf[256];				
 	int age = millis() - isrData.timestamp;
 	snprintf(sbuf, sizeof(sbuf),
-		"P=%f R=%f HDG=%f TRK=%f IAS=%f TAS=%f PALT=%f MODE=%f "
+		"P=%f R=%f HDG=%f TRK=%f IAS=%f TAS=%f PALT=%f MODE=%d "
 		"KNOB0=%f KNOB1=%f KNOB2=%f\n",
 		isrData.pitch * 180 / M_PI, isrData.roll * 180 / M_PI, 
 		isrData.magHdg * 180 / M_PI, isrData.magTrack * 180 / M_PI, 
