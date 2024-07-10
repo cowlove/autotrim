@@ -151,7 +151,7 @@ void superSend(const char *b) {
 #endif
 	autopilot.write(string(b));
 	autopilotPackets++;
-	//Serial.print(b);
+	Serial.print(b);
 }
 
 struct IsrData {
@@ -399,7 +399,7 @@ void canParse(int id, int len, int timestamp, const char *ibuf) {
 		}
 	} 	
 	if (lastId == 0x18882100 && ibuf[0] == 0xdd && ibuf[1] == 0x00 && mpSize == 60) {
-		float thresh = 0.001;
+		float thresh = 0.0001;
 		try {
 			float pitch = floatFromBinary(&ibuf[20]);
 			float roll = floatFromBinary(&ibuf[24]);
@@ -458,7 +458,7 @@ void canParse(int id, int len, int timestamp, const char *ibuf) {
 			if (abs(ias - lastSent.ias) > thresh || 
 				abs(tas - lastSent.tas) > thresh || 
 				abs(palt - lastSent.palt) > thresh) { 
-				sendUdpCan("IAS=%f TAS=%f PALT=%f", ias / 0.5144, tas / 0.5144, palt);
+				sendUdpCan("IAS=%f TAS=%f PALT=%f\n", ias / 0.5144, tas / 0.5144, palt);
 				lastSent.ias = ias;
 				lastSent.tas = tas;
 				lastSent.palt = palt;
