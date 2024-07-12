@@ -186,7 +186,7 @@ public:
 	int getQueueLen() { return pktQueue.getCount(); } 
 	int isrCount = 0, pktCount = 0, dropped = 0;
 	void onReceive(	void (*f)(int, int, int, const char *)){ onCanPacket = f; }
-	
+	vector<uint32_t> filters;
 	void begin() { 
 		CAN.setPins(pins.canRx, pins.canTx);     
 		if (!CAN.begin(1000E3)) {
@@ -210,16 +210,24 @@ public:
 			pktQueue.freeTail();
 			if (maxPkts > 0) 
 				maxPkts--;
-			if (cp.id != lastId || mpSize >= sizeof(ibuf)) {
-				pktCount++;
-				if (onCanPacket != NULL) {
-					onCanPacket(lastId, mpSize, cp.timestamp, ibuf);
-				}
-				mpSize = 0;
-				lastId = cp.id;
+
+			bool filtMatch = false;
+			for(auto f : filters) { 
+				if (cp.id == f)
+					filtMatch = true;
 			}
-			for(int n = 0; n < cp.len && mpSize < sizeof(ibuf); n++) {
-				ibuf[mpSize++] = cp.buf[n];
+			if (filtMatch || filters.size() == 0) { 
+				if (cp.id != lastId || mpSize >= sizeof(ibuf)) {
+					pktCount++;
+					if (onCanPacket != NULL) {
+						onCanPacket(lastId, mpSize, cp.timestamp, ibuf);
+					}
+					mpSize = 0;
+					lastId = cp.id;
+				}
+				for(int n = 0; n < cp.len && mpSize < sizeof(ibuf); n++) {
+					ibuf[mpSize++] = cp.buf[n];
+				}
 			}
 		}
 	}
@@ -367,7 +375,8 @@ void canParse(int id, int len, int timestamp, const char *ibuf) {
 		}
 	} 
 
-	if ((lastId == 0x18882100 || lastId == 0x188c2100) && ibuf[0] == 0xdd && ibuf[1] == 0x00 && mpSize == 60 && ibuf[15] & 0x40) {
+	if ((lastId == 0x18882100 || lastId == 0x188c2100) && ibuf[0] == 0xdd && ibuf[1] == 0x00 
+		&& mpSize == 60 && ibuf[15] & 0x40) {
 		float thresh = .01;
 		try {
 			float magHdg = floatFromBinary(&ibuf[16]);
@@ -380,7 +389,8 @@ void canParse(int id, int len, int timestamp, const char *ibuf) {
 			isrData.magHdg = 0;
 		}
 	} 
-	if ((lastId == 0x18882100 || lastId == 0x188c2100) && ibuf[0] == 0xdd && ibuf[1] == 0x00 && mpSize == 60 && ibuf[15] & 0x20) {
+	if ((lastId == 0x18882100 || lastId == 0x188c2100) && ibuf[0] == 0xdd && ibuf[1] == 0x00 
+		&& mpSize == 60 && ibuf[15] & 0x20) {
 		float thresh = .01;
 		try {
 			float magTrack = floatFromBinary(&ibuf[16]);
@@ -600,6 +610,9 @@ void setup() {
 
 	can = new CanWrapper();
 	can->onReceive(canParse);
+	can->filters.push_back(0x18882100);
+	can->filters.push_back(0x10882200);
+	can->filters.push_back(0x108c2200);
 	can->begin();
 }
 EggTimer report(2000);
