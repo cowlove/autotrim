@@ -122,7 +122,7 @@ struct DummyLoopTime {
 } loopTimeAvg;
 uint64_t lastLoopTime = -1;
 EggTimer serialReportTimer(1000), displayTimer(1000);
-EggTimer pinReportTimer(50), canResetTimer(5000), sl30Heartbeat(1000), sdCardFlush(2000);
+EggTimer pinReportTimer(500), canResetTimer(5000), sl30Heartbeat(1000), sdCardFlush(2000);
 
 uint64_t nextCmdTime = 0;
 static bool debugMoveNeedles = false;
@@ -151,7 +151,7 @@ void superSend(const char *b) {
 #endif
 	autopilot.write(string(b));
 	autopilotPackets++;
-	//Serial.print(b);
+	Serial.print(b);
 }
 
 struct IsrData {
@@ -165,6 +165,7 @@ struct IsrData {
 	int udpErrs;
 } isrData, lastSent;
 
+float knobValues[10];
 
 class CanWrapper {
 	//Mutex canMutex;
@@ -279,11 +280,18 @@ void sendUdpCan(const char *format, ...) {
 }
 
 void sendCanData() { 
-	char sbuf[160];				
+	char sbuf[256];				
 	int age = millis() - isrData.timestamp;
-	snprintf(sbuf, sizeof(sbuf), "%+06.3f %+06.3f %+06.3f %+06.3f %+06.3f %+06.3f %+06.3f %d %+06.3f %d %d CAN\n", 
-		isrData.pitch, isrData.roll, isrData.magHdg, isrData.magTrack, isrData.ias, isrData.tas, 
-		isrData.palt, isrData.knobSel, isrData.knobVal, age, isrData.mode);
+	snprintf(sbuf, sizeof(sbuf),
+		"P=%f R=%f HDG=%f TRK=%f IAS=%f TAS=%f PALT=%f MODE=%d "
+		"KNOB0=%f KNOB1=%f KNOB2=%f\n",
+		isrData.pitch * 180 / M_PI, isrData.roll * 180 / M_PI, 
+		isrData.magHdg * 180 / M_PI, isrData.magTrack * 180 / M_PI, 
+		isrData.ias / MPS_PER_KNOT, isrData.tas / MPS_PER_KNOT, 
+		isrData.palt, isrData.mode, knobValues[0], knobValues[1], knobValues[2]);
+	//snprintf(sbuf, sizeof(sbuf), "%+06.3f %+06.3f %+06.3f %+06.3f %+06.3f %+06.3f %+06.3f %d %+06.3f %d %d CAN\n", 
+	//	isrData.pitch, isrData.roll, isrData.magHdg, isrData.magTrack, isrData.ias, isrData.tas, 
+	//	isrData.palt, isrData.knobSel, isrData.knobVal, age, isrData.mode);
 	superSend(sbuf);
 	lastSent = isrData;
 	fd.write(sbuf, strlen(sbuf));
@@ -360,24 +368,27 @@ void canParse(int id, int len, int timestamp, const char *ibuf) {
 		Serial.print(obuf);
 	}
 
+
+#if 0 
+	// maybe is GPS altitude? 
 	if ((lastId == 0x18882100 || lastId == 0x188c2100) && 
 		ibuf[0] == 0xc1 && ibuf[1] == 0x0b && mpSize == 84) {
-		float thresh = .01;
+		float thresh = 0.1;
 		try {
 			float palt = floatFromBinary(&ibuf[64]);
-			if (abs(palt - lastSent.palt) > thresh) { 
+			if (abs(palt - lastSent.palt) > thresh && palt > 200) { 
 				sendUdpCan("PALT=%.5f\n", palt);
 				lastSent.palt = palt;
+				isrData.palt = palt;
 			}
-			isrData.palt = palt;
 		} catch(...) {
 			//isrData.palt = 0;
 		}
 	} 
+#endif
 
-	if ((lastId == 0x18882100 || lastId == 0x188c2100) && ibuf[0] == 0xdd && ibuf[1] == 0x00 
-		&& mpSize == 60 && ibuf[15] & 0x40) {
-		float thresh = .01;
+	if ((lastId == 0x18882100 || lastId == 0x188c2100) && ibuf[0] == 0xdd && ibuf[1] == 0x00 && mpSize == 60 && ibuf[15] & 0x40) {
+		float thresh = 0.001;
 		try {
 			float magHdg = floatFromBinary(&ibuf[16]);
 			if (abs(magHdg - lastSent.magHdg) > thresh) { 
@@ -389,9 +400,8 @@ void canParse(int id, int len, int timestamp, const char *ibuf) {
 			isrData.magHdg = 0;
 		}
 	} 
-	if ((lastId == 0x18882100 || lastId == 0x188c2100) && ibuf[0] == 0xdd && ibuf[1] == 0x00 
-		&& mpSize == 60 && ibuf[15] & 0x20) {
-		float thresh = .01;
+	if ((lastId == 0x18882100 || lastId == 0x188c2100) && ibuf[0] == 0xdd && ibuf[1] == 0x00 && mpSize == 60 && ibuf[15] & 0x20) {
+		float thresh = 0.001;
 		try {
 			float magTrack = floatFromBinary(&ibuf[16]);
 			if (abs(magTrack - lastSent.magTrack) > thresh) {   
@@ -405,7 +415,7 @@ void canParse(int id, int len, int timestamp, const char *ibuf) {
 		}
 	} 	
 	if (lastId == 0x18882100 && ibuf[0] == 0xdd && ibuf[1] == 0x00 && mpSize == 60) {
-		float thresh = 0.0;
+		float thresh = 0.0001;
 		try {
 			float pitch = floatFromBinary(&ibuf[20]);
 			float roll = floatFromBinary(&ibuf[24]);
@@ -425,6 +435,7 @@ void canParse(int id, int len, int timestamp, const char *ibuf) {
 		}
 		//sendCanData(false);
 	}
+#if 0 
 	if (lastId == 0x18882100 && ibuf[0] == 0xdc && ibuf[1] == 0x02 && mpSize >= 16) {
 		float thresh = .01;
 		try {
@@ -439,6 +450,7 @@ void canParse(int id, int len, int timestamp, const char *ibuf) {
 			isrData.exceptions++;
 		}
 	}
+#endif
 	/*
 	if (lastId == 0x18882100 && ibuf[0] == 0xdd && ibuf[1] == 0x0a && mpSize >= 32) {
 		try {
@@ -453,7 +465,7 @@ void canParse(int id, int len, int timestamp, const char *ibuf) {
 	}
 	*/
 	if (lastId == 0x18882100 && ibuf[0] == 0xdd && ibuf[1] == 0x0a && mpSize >= 40) {
-		float thresh = .1;
+		float thresh = 0.0;
 		try {
 			float ias = floatFromBinary(&ibuf[12]); 
 			float tas = floatFromBinary(&ibuf[16]);
@@ -462,7 +474,8 @@ void canParse(int id, int len, int timestamp, const char *ibuf) {
 			if (abs(ias - lastSent.ias) > thresh || 
 				abs(tas - lastSent.tas) > thresh || 
 				abs(palt - lastSent.palt) > thresh) { 
-				sendUdpCan("IAS=%f TAS=%f PALT=%f", ias / 0.5144, tas / 0.5144, palt);
+				sendUdpCan("IAS=%f TAS=%f PALT=%f\n", ias / MPS_PER_KNOT, 
+				tas / MPS_PER_KNOT, palt);
 				lastSent.ias = ias;
 				lastSent.tas = tas;
 				lastSent.palt = palt;
@@ -483,8 +496,10 @@ void canParse(int id, int len, int timestamp, const char *ibuf) {
 			int knobSel = ibuf[2];					
 			isrData.knobVal = knobVal;
 			isrData.knobSel = knobSel;
-			Serial.printf("KSEL=%d KVAL=%f\n", knobSel, knobVal);
-			sendUdpCan("KSEL=%d KVAL=%f\n", knobSel, knobVal);
+			if (knobSel >= 0 && knobSel < sizeof(knobValues)/sizeof(knobValues[0]))
+				knobValues[knobSel] = knobVal;
+			Serial.printf("KNOB%d=%f\n", knobSel, knobVal);
+			sendUdpCan("KNOB%d=%f\n", knobSel, knobVal);
 			if (knobSel > 0 && knobSel < sizeof(g5KnobValues)/sizeof(g5KnobValues[0]))
 				g5KnobValues[knobSel] = knobVal;
 		} catch(...) {
@@ -749,7 +764,7 @@ void loop() {
 			//Serial.print(s.c_str());
 		}
 	}
-	//canSerial = udpCanOut = (isrData.mode == 7);
+	canSerial = udpCanOut = (isrData.mode == 7);
 	delayMicroseconds(1);
 }
 

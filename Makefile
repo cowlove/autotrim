@@ -23,7 +23,7 @@ backtrace:
 	tr ' ' '\n' | /home/jim/.arduino15/packages/esp32/tools/xtensa-esp32-elf-gcc/*/bin/xtensa-esp32-elf-addr2line -f -i -e $(BUILD_DIR)/*.elf
 
 
-autotrim_ubuntu:	.DUMMY
+autotrim_ubuntu:	
 	g++  -x c++ -g autotrim.ino -o autotrim_ubuntu -DESP32 -DCSIM -DUBUNTU -I./ -I${HOME}/Arduino/libraries/jimlib/src 
 # add -pg to profile 
 	
