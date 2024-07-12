@@ -1,0 +1,4 @@
+
+* Make a proper CAN address filter so program can parse interleaved CAN packets
+* Make a unified G5 value update class that handles change thresholds and minimum update frequencies
+* Cleanup, gut and remove trim relay garbage
