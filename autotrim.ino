@@ -166,6 +166,9 @@ struct IsrData {
 } isrData, lastSent;
 
 float knobValues[10];
+int canSerial = 0;
+void canToText(const uint8_t *ibuf, int lastId, int mpSize, uint64_t ts, char *obuf, int obufsz);
+
 
 class CanWrapper {
 	//Mutex canMutex;
@@ -204,11 +207,17 @@ public:
 	void reset() { CAN.filter(0,0); }
 	void run(int timeout, int maxPkts = -1) { 
 		CanPacket *p;
+		char obuf[128];
 		while(maxPkts != 0 && (p = pktQueue.peekTail(timeout)) != NULL) { 
 			CanPacket cp = *p;
 			pktQueue.freeTail();
 			if (maxPkts > 0) 
 				maxPkts--;
+
+			if (canSerial) {
+				canToText(cp.buf, cp.id, cp.len, cp.timestamp, obuf, sizeof(obuf));
+				Serial.print(obuf);
+			}
 
 			bool filtMatch = false;
 			for(auto f : filters) { 
@@ -226,7 +235,7 @@ public:
 		if (packetSize) {
 			CanPacket *pkt = pktQueue.peekHead(0);
 			if (pkt != NULL) {
-				pkt->timestamp = millis();				
+				pkt->timestamp = micros();				
 				pkt->id = CAN.packetId();
 				pkt->len = packetSize;
 				if (!CAN.packetRtr()) {
@@ -250,8 +259,6 @@ CanWrapper *can = NULL;
 uint8_t canDebugBuf[1024];
 //PidControl pid(2);
 //static RollingAverage<int,1000> trimPosAvg;
-int canSerial = 0;
-
 
 struct CanChannel {
 	uint32_t channel;
@@ -364,7 +371,7 @@ void openLogFile(const char *filename) {
 }
 
 void canToText(const uint8_t *ibuf, int lastId, int mpSize, uint64_t ts, char *obuf, int obufsz) { 
-	snprintf(obuf, obufsz, " (%.3f) can0 %08x [%02d] ", ts / 1000.0, lastId, mpSize);
+	snprintf(obuf, obufsz, " (%.6f) can0 %08x [%02d] ", ts / 1000000.0, lastId, mpSize);
 	int outlen = strlen(obuf);
 	for(int n = 0; n < mpSize; n++) {
 		if (n > 0 && (n % 8) == 0) { 
@@ -393,10 +400,6 @@ void canParse(int id, int len, int timestamp, const uint8_t *ibuf) {
 		}
 	}
 #endif
-	if (canSerial) {
-		canToText(ibuf, lastId, mpSize, millis(), obuf, sizeof(obuf));
-		Serial.print(obuf);
-	}
 
 
 #if 0 
