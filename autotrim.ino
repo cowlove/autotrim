@@ -178,15 +178,15 @@ class CanWrapper {
 	};
 
 	CircularBoundedQueue<CanPacket> pktQueue = CircularBoundedQueue<CanPacket>(256);
-	char ibuf[1024];
+	uint8_t ibuf[1024];
 	int mpSize = 0, lastId = 0;
-	//void onCanPacket(int id, int len, int timestamp, const char *buf) {}
-	void (*onCanPacket)(int, int, int, const char *) = NULL;
+	//void onCanPacket(int id, int len, int timestamp, const uint8_t *buf) {}
+	void (*onCanPacket)(int, int, int, const uint8_t *) = NULL;
 	
 public:
 	int getQueueLen() { return pktQueue.getCount(); } 
 	int isrCount = 0, pktCount = 0, dropped = 0;
-	void onReceive(	void (*f)(int, int, int, const char *)){ onCanPacket = f; }
+	void onReceive(	void (*f)(int, int, int, const uint8_t *)){ onCanPacket = f; }
 	vector<uint32_t> filters;
 	void begin() { 
 		CAN.setPins(pins.canRx, pins.canTx);     
@@ -198,6 +198,8 @@ public:
 		CAN.filter(0,0);
 		instancePtr = this;
 		CAN.onReceive([](int len) { CanWrapper::instancePtr->isr(len); });
+		mpSize = 0;
+		lastId = -1;
 	}
 	void end() { 
 		CAN.onReceive(NULL);
@@ -220,8 +222,8 @@ public:
 			if (filtMatch || filters.size() == 0) { 
 				if (cp.id != lastId || mpSize >= sizeof(ibuf)) {
 					pktCount++;
-					if (onCanPacket != NULL) {
-						onCanPacket(lastId, mpSize, cp.timestamp, ibuf);
+					if (onCanPacket != NULL && mpSize > 0) {
+						onCanPacket((int)lastId, (int)mpSize, (int)cp.timestamp, ibuf);
 					}
 					mpSize = 0;
 					lastId = cp.id;
@@ -299,7 +301,7 @@ void sendCanData() {
 }
 
 
-float floatFromBinary(const char *b) { 
+float floatFromBinary(const uint8_t *b) { 
 	char buf[4];
 	for (int n = 0; n < 4; n++) {
 		buf[n] = b[n];
@@ -333,7 +335,7 @@ void openLogFile(const char *filename) {
 
 }
 
-void canToText(const char *ibuf, int lastId, int mpSize, uint64_t ts, char *obuf, int obufsz) { 
+void canToText(const uint8_t *ibuf, int lastId, int mpSize, uint64_t ts, char *obuf, int obufsz) { 
 	snprintf(obuf, obufsz, " (%.3f) can0 %08x [%02d] ", ts / 1000.0, lastId, mpSize);
 	int outlen = strlen(obuf);
 	for(int n = 0; n < mpSize; n++) {
@@ -348,7 +350,7 @@ void canToText(const char *ibuf, int lastId, int mpSize, uint64_t ts, char *obuf
 	obuf[outlen] = 0;				
 }
 
-void canParse(int id, int len, int timestamp, const char *ibuf) { 
+void canParse(int id, int len, int timestamp, const uint8_t *ibuf) { 
 	int lastId = id;
 	int mpSize = len;
 	static char obuf[1024];
@@ -534,7 +536,7 @@ void canParse(int id, int len, int timestamp, const char *ibuf) {
 	}	
 
 	if (fd == true) { 
-		canToText((char *)ibuf, id, len, timestamp, obuf, sizeof(obuf));
+		canToText(ibuf, id, len, timestamp, obuf, sizeof(obuf));
 		fd.write(obuf, strlen(obuf));
 		if (sdCardFlush.tick()) 
 			fd.flush();
@@ -625,9 +627,9 @@ void setup() {
 
 	can = new CanWrapper();
 	can->onReceive(canParse);
-	can->filters.push_back(0x18882100);
-	can->filters.push_back(0x10882200);
-	can->filters.push_back(0x108c2200);
+	//can->filters.push_back(0x18882100);
+	//can->filters.push_back(0x10882200);
+	//can->filters.push_back(0x108c2200);
 	can->begin();
 }
 EggTimer report(2000);
@@ -764,7 +766,12 @@ void loop() {
 			//Serial.print(s.c_str());
 		}
 	}
-	canSerial = udpCanOut = (isrData.mode == 7);
+	if (isrData.mode == 7) 
+		canSerial = udpCanOut = 1;
+	if (isrData.mode == 1) 
+		canSerial = udpCanOut = 0;
+
+	//canSerial = udpCanOut = (isrData.mode == 7);
 	delayMicroseconds(1);
 }
 
