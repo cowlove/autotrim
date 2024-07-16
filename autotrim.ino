@@ -178,8 +178,6 @@ class CanWrapper {
 	};
 
 	CircularBoundedQueue<CanPacket> pktQueue = CircularBoundedQueue<CanPacket>(256);
-	uint8_t ibuf[1024];
-	int mpSize = 0, lastId = 0;
 	//void onCanPacket(int id, int len, int timestamp, const uint8_t *buf) {}
 	void (*onCanPacket)(int, int, int, const uint8_t *) = NULL;
 	
@@ -198,8 +196,6 @@ public:
 		CAN.filter(0,0);
 		instancePtr = this;
 		CAN.onReceive([](int len) { CanWrapper::instancePtr->isr(len); });
-		mpSize = 0;
-		lastId = -1;
 	}
 	void end() { 
 		CAN.onReceive(NULL);
@@ -220,17 +216,9 @@ public:
 					filtMatch = true;
 			}
 			if (filtMatch || filters.size() == 0) { 
-				if (cp.id != lastId || mpSize >= sizeof(ibuf)) {
-					pktCount++;
-					if (onCanPacket != NULL && mpSize > 0) {
-						onCanPacket((int)lastId, (int)mpSize, (int)cp.timestamp, ibuf);
-					}
-					mpSize = 0;
-					lastId = cp.id;
-				}
-				for(int n = 0; n < cp.len && mpSize < sizeof(ibuf); n++) {
-					ibuf[mpSize++] = cp.buf[n];
-				}
+				pktCount++;
+				if (onCanPacket != NULL)
+						onCanPacket((int)cp.id, (int)cp.len, (int)cp.timestamp, cp.buf);
 			}
 		}
 	}
@@ -263,6 +251,46 @@ uint8_t canDebugBuf[1024];
 //PidControl pid(2);
 //static RollingAverage<int,1000> trimPosAvg;
 int canSerial = 0;
+
+
+struct CanChannel {
+	uint32_t channel;
+	uint32_t chanMask;
+	uint8_t buf[256];
+	uint32_t lastPktTs = 0;
+	int len = 0;
+	CanChannel(uint32_t c, uint32_t m = 0xffffffff) : chanMask(m), channel(c) {}
+
+	bool available() { return millis() - lastPktTs > 5 && len > 0; }
+	bool add(uint32_t chan, const uint8_t *data, int l) { 
+		if ((channel & chanMask) != (chan & chanMask))
+			return false;
+		for(int i = 0; i < l; i++) {
+			if (len + i < sizeof(buf))
+				buf[len + i] = data[i];			
+		}
+		len = min((int)sizeof(buf), len + l);
+		lastPktTs = millis();
+		return true;
+	}
+};
+
+vector<CanChannel> channels;
+void canParse(int id, int len, int timestamp, const uint8_t *ibuf);
+
+void canSort(int id, int len, int timestamp, const uint8_t *ibuf) { 
+	for(auto i = channels.begin(); i != channels.end(); i++) { 
+		if (i->available()) {
+			canParse(id, i->len, timestamp, i->buf);
+			i->len = 0;
+		}
+	}
+	for(auto i = channels.begin(); i != channels.end(); i++) { 
+		if (i->add(id, ibuf, len))
+			break;
+	}
+}
+
 
 void sendDebugData() { 
 	char sbuf[160];				
@@ -626,10 +654,17 @@ void setup() {
 #endif
 
 	can = new CanWrapper();
-	can->onReceive(canParse);
+	can->onReceive(canSort);
 	//can->filters.push_back(0x18882100);
 	//can->filters.push_back(0x10882200);
 	//can->filters.push_back(0x108c2200);
+
+	channels.push_back(CanChannel(0x18882100));
+	channels.push_back(CanChannel(0x188c2100));
+	channels.push_back(CanChannel(0x18882200));
+	channels.push_back(CanChannel(0x188c2200));
+	channels.push_back(CanChannel(0, 0));
+
 	can->begin();
 }
 EggTimer report(2000);
