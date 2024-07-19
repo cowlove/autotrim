@@ -166,7 +166,7 @@ struct IsrData {
 } isrData, lastSent;
 
 float knobValues[10];
-int canSerial = 0;
+int canSerial = 1;
 void canToText(const uint8_t *ibuf, int lastId, int mpSize, uint64_t ts, char *obuf, int obufsz);
 
 
@@ -182,12 +182,12 @@ class CanWrapper {
 
 	CircularBoundedQueue<CanPacket> pktQueue = CircularBoundedQueue<CanPacket>(256);
 	//void onCanPacket(int id, int len, int timestamp, const uint8_t *buf) {}
-	void (*onCanPacket)(int, int, int, const uint8_t *) = NULL;
+	void (*onCanPacket)(int, int, uint32_t, const uint8_t *) = NULL;
 	
 public:
 	int getQueueLen() { return pktQueue.getCount(); } 
 	int isrCount = 0, pktCount = 0, dropped = 0;
-	void onReceive(	void (*f)(int, int, int, const uint8_t *)){ onCanPacket = f; }
+	void onReceive(	void (*f)(int, int, uint32_t, const uint8_t *)){ onCanPacket = f; }
 	vector<uint32_t> filters;
 	void begin() { 
 		CAN.setPins(pins.canRx, pins.canTx);     
@@ -216,7 +216,7 @@ public:
 
 			if (canSerial) {
 				canToText(cp.buf, cp.id, cp.len, cp.timestamp, obuf, sizeof(obuf));
-				Serial.print(obuf);
+				Serial.print("RU "); Serial.print(obuf);
 			}
 
 			bool filtMatch = false;
@@ -263,12 +263,26 @@ uint8_t canDebugBuf[1024];
 struct CanChannel {
 	uint32_t channel;
 	uint32_t chanMask;
+	uint32_t header;
+	uint32_t headerMask;
 	uint8_t buf[256];
 	uint32_t lastPktTs = 0;
 	int len = 0;
-	CanChannel(uint32_t c, uint32_t m = 0xffffffff) : chanMask(m), channel(c) {}
+	CanChannel(uint32_t c, uint32_t m = 0xffffffff, uint32_t h = 0xffffffff, uint32_t hm = 0xffffffff)
+	 : channel(c), chanMask(m), header(h), headerMask(hm) {}
 
-	bool available() { return millis() - lastPktTs > 5 && len > 0; }
+	bool available(uint32_t chan, const uint8_t *ibuf, int l) { 
+		if (micros() - lastPktTs > 1000 && len > 0) 
+			return true;
+		if (len == 0 || (channel & chanMask) != (chan & chanMask))
+			return false;
+		if (l >= 4) { 
+			uint32_t firstWord = (ibuf[0] << 24) | (ibuf[1] << 16) | (ibuf[2] << 8) | ibuf[3];
+			if ((firstWord & headerMask) == (header & headerMask))
+				return true;
+		}
+		return false;
+	}
 	bool add(uint32_t chan, const uint8_t *data, int l) { 
 		if ((channel & chanMask) != (chan & chanMask))
 			return false;
@@ -277,20 +291,23 @@ struct CanChannel {
 				buf[len + i] = data[i];			
 		}
 		len = min((int)sizeof(buf), len + l);
-		lastPktTs = millis();
+		lastPktTs = micros();
 		return true;
 	}
 };
 
 vector<CanChannel> channels;
-void canParse(int id, int len, int timestamp, const uint8_t *ibuf);
+void canParse(int id, int len, uint32_t timestamp, const uint8_t *ibuf);
 
-void canSort(int id, int len, int timestamp, const uint8_t *ibuf) { 
+void onPacket(int id, uint32_t timestamp, vector<CanChannel>::iterator i) { 
+	canParse(id, i->len, timestamp, i->buf);
+	i->len = 0;
+}
+void canSort(int id, int len, uint32_t timestamp, const uint8_t *ibuf) { 
+	// channels timed out? 
 	for(auto i = channels.begin(); i != channels.end(); i++) { 
-		if (i->available()) {
-			canParse(id, i->len, timestamp, i->buf);
-			i->len = 0;
-		}
+		if (i->available(id, ibuf, len)) 
+			onPacket(i->channel, timestamp, i);
 	}
 	for(auto i = channels.begin(); i != channels.end(); i++) { 
 		if (i->add(id, ibuf, len))
@@ -385,10 +402,14 @@ void canToText(const uint8_t *ibuf, int lastId, int mpSize, uint64_t ts, char *o
 	obuf[outlen] = 0;				
 }
 
-void canParse(int id, int len, int timestamp, const uint8_t *ibuf) { 
+void canParse(int id, int len, uint32_t timestamp, const uint8_t *ibuf) { 
 	int lastId = id;
 	int mpSize = len;
 	static char obuf[1024];
+	if (canSerial) {
+		canToText(ibuf, id, len, timestamp, obuf, sizeof(obuf));
+		Serial.printf("CP "); Serial.print(obuf);
+	}
 
 #if 0 	
 	for (int i = 0; i < len / 4; i++) { 
@@ -420,7 +441,8 @@ void canParse(int id, int len, int timestamp, const uint8_t *ibuf) {
 	} 
 #endif
 
-	if ((lastId == 0x18882100 || lastId == 0x188c2100) && ibuf[0] == 0xdd && ibuf[1] == 0x00 && mpSize == 60 && ibuf[15] & 0x40) {
+	if ((lastId == 0x18882100 || lastId == 0x188c2100) 
+		&& ibuf[0] == 0xdd && ibuf[1] == 0x00 && mpSize >= 52 && ibuf[15] & 0x40) {
 		float thresh = 0.001;
 		try {
 			float magHdg = floatFromBinary(&ibuf[16]);
@@ -433,7 +455,9 @@ void canParse(int id, int len, int timestamp, const uint8_t *ibuf) {
 			isrData.magHdg = 0;
 		}
 	} 
-	if ((lastId == 0x18882100 || lastId == 0x188c2100) && ibuf[0] == 0xdd && ibuf[1] == 0x00 && mpSize == 60 && ibuf[15] & 0x20) {
+	if ((lastId == 0x18882100 || lastId == 0x188c2100) 
+	&& ibuf[0] == 0xdd && ibuf[1] == 0x00 && mpSize >= 52  
+	&& ibuf[15] & 0x20) {
 		float thresh = 0.001;
 		try {
 			float magTrack = floatFromBinary(&ibuf[16]);
@@ -447,8 +471,9 @@ void canParse(int id, int len, int timestamp, const uint8_t *ibuf) {
 			isrData.magTrack = 0;
 		}
 	} 	
-	if (lastId == 0x18882100 && ibuf[0] == 0xdd && ibuf[1] == 0x00 && mpSize == 60) {
-		float thresh = 0.0001;
+	if (lastId == 0x18882100 
+		&& ibuf[0] == 0xdd && ibuf[1] == 0x00 && mpSize == 60) {
+		float thresh = 0.00005;
 		try {
 			float pitch = floatFromBinary(&ibuf[20]);
 			float roll = floatFromBinary(&ibuf[24]);
@@ -662,10 +687,14 @@ void setup() {
 	//can->filters.push_back(0x10882200);
 	//can->filters.push_back(0x108c2200);
 
-	channels.push_back(CanChannel(0x18882100));
-	channels.push_back(CanChannel(0x188c2100));
-	channels.push_back(CanChannel(0x18882200));
-	channels.push_back(CanChannel(0x188c2200));
+	channels.push_back(CanChannel(0x18882100, -1, 0xdd000000, 0xfff00000));
+	channels.push_back(CanChannel(0x188c2100, -1, 0xdd000000, 0xfff00000));
+	channels.push_back(CanChannel(0x18882200, -1, 0xdd000000, 0xfff00000));
+	channels.push_back(CanChannel(0x188c2200, -1, 0xdd000000, 0xfff00000));
+	channels.push_back(CanChannel(0x10882200, -1, 0xe4650000, 0xffff000));
+	channels.push_back(CanChannel(0x108c2200, -1, 0xe4650000, 0xffff000));
+
+
 	channels.push_back(CanChannel(0, 0));
 
 	can->begin();
@@ -806,7 +835,7 @@ void loop() {
 	}
 	if (isrData.mode == 7) 
 		canSerial = udpCanOut = 1;
-	if (isrData.mode == 1) 
+	if (isrData.mode == 5) 
 		canSerial = udpCanOut = 0;
 
 	//canSerial = udpCanOut = (isrData.mode == 7);
