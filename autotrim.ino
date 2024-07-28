@@ -695,12 +695,9 @@ void setup() {
 	channels.push_back(CanChannel(0x188c2100, -1, 0xdd000000, 0xfff00000));
 	channels.push_back(CanChannel(0x18882200, -1, 0xdd000000, 0xfff00000));
 	channels.push_back(CanChannel(0x188c2200, -1, 0xdd000000, 0xfff00000));
-	channels.push_back(CanChannel(0x10882200, -1, 0xe4650000, 0xffff000));
-	channels.push_back(CanChannel(0x108c2200, -1, 0xe4650000, 0xffff000));
-
-
+	channels.push_back(CanChannel(0x10882200, -1, 0xe4650000, 0xffff0000));
+	channels.push_back(CanChannel(0x108c2200, -1, 0xe4650000, 0xffff0000));
 	channels.push_back(CanChannel(0, 0));
-
 	can->begin();
 }
 EggTimer report(2000);
