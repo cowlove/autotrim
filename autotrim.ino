@@ -304,6 +304,10 @@ void onPacket(int id, uint32_t timestamp, vector<CanChannel>::iterator i) {
 	i->len = 0;
 }
 void canSort(int id, int len, uint32_t timestamp, const uint8_t *ibuf) { 
+	// The timestamp coming in doesn´t seem to compare well with micros(),
+	// maybe the two cores have different micros() 
+	timestamp = micros(); 
+
 	// channels timed out? 
 	for(auto i = channels.begin(); i != channels.end(); i++) { 
 		if (i->available(id, ibuf, len)) 
