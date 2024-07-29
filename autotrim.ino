@@ -122,7 +122,7 @@ struct DummyLoopTime {
 } loopTimeAvg;
 uint64_t lastLoopTime = -1;
 EggTimer serialReportTimer(1000), displayTimer(1000);
-EggTimer pinReportTimer(500), canResetTimer(5000), sl30Heartbeat(1000), sdCardFlush(2000);
+EggTimer canReportTimer(1000), canResetTimer(5000), sl30Heartbeat(1000), sdCardFlush(2000);
 
 uint64_t nextCmdTime = 0;
 static bool debugMoveNeedles = false;
@@ -133,22 +133,6 @@ static int autopilotPackets = 0;
 
 // send udp packet multiple times on broadcast address and all addresses in normal EchoUAT wifi range 
 void superSend(const char *b) { 
-#if 0 
-   for (int repeat = 0; repeat < 1; repeat++) { 
-		udp.beginPacket("255.255.255.255", 7891);
-		udp.write((uint8_t *)b, strlen(b));
-		udp.endPacket();
-		for (int n = 100; n < 103; n++) {
-			if (WiFi.localIP()[3] != n) { 
-				char ip[32];
-				snprintf(ip, sizeof(ip), "192.168.4.%d", n);
-				udp.beginPacket(ip, 7891);
-				udp.write((const uint8_t *)b, strlen(b));
-				udp.endPacket();
-			}
-		}
-	}
-#endif
 	autopilot.write(string(b));
 	autopilotPackets++;
 	Serial.print(b);
@@ -158,7 +142,7 @@ struct IsrData {
 	float pitch, roll, knobVal = 0, magHdg, magTrack, ias, tas, palt, slip;
 	int knobSel, mode;
 	bool forceSend;
-	uint64_t timestamp;
+	uint32_t timestamp;
 	uint8_t *bufIn, *bufOut; 
 	int exceptions;
 	int udpSent;
@@ -166,9 +150,8 @@ struct IsrData {
 } isrData, lastSent;
 
 float knobValues[10];
-int canSerial = 1;
-void canToText(const uint8_t *ibuf, int lastId, int mpSize, uint64_t ts, char *obuf, int obufsz);
-
+int canSerial = 0;
+void canToText(const uint8_t *ibuf, int lastId, int mpSize, uint32_t ts, char *obuf, int obufsz);
 
 class CanWrapper {
 	//Mutex canMutex;
@@ -216,7 +199,8 @@ public:
 
 			if (canSerial) {
 				canToText(cp.buf, cp.id, cp.len, cp.timestamp, obuf, sizeof(obuf));
-				Serial.print("RU "); Serial.print(obuf);
+				Serial.print("C "); 
+				Serial.print(obuf);
 			}
 
 			bool filtMatch = false;
@@ -271,8 +255,8 @@ struct CanChannel {
 	CanChannel(uint32_t c, uint32_t m = 0xffffffff, uint32_t h = 0xffffffff, uint32_t hm = 0xffffffff)
 	 : channel(c), chanMask(m), header(h), headerMask(hm) {}
 
-	bool available(uint32_t chan, const uint8_t *ibuf, int l) { 
-		if (micros() - lastPktTs > 1000 && len > 0) 
+	bool available(uint32_t chan, const uint8_t *ibuf, int l, uint32_t ts) { 
+		if (ts - lastPktTs > 2000 && len > 0) 
 			return true;
 		if (len == 0 || (channel & chanMask) != (chan & chanMask))
 			return false;
@@ -283,7 +267,7 @@ struct CanChannel {
 		}
 		return false;
 	}
-	bool add(uint32_t chan, const uint8_t *data, int l) { 
+	bool add(uint32_t chan, const uint8_t *data, int l, uint32_t ts) { 
 		if ((channel & chanMask) != (chan & chanMask))
 			return false;
 		for(int i = 0; i < l; i++) {
@@ -291,7 +275,7 @@ struct CanChannel {
 				buf[len + i] = data[i];			
 		}
 		len = min((int)sizeof(buf), len + l);
-		lastPktTs = micros();
+		lastPktTs = ts;
 		return true;
 	}
 };
@@ -306,15 +290,16 @@ void onPacket(int id, uint32_t timestamp, vector<CanChannel>::iterator i) {
 void canSort(int id, int len, uint32_t timestamp, const uint8_t *ibuf) { 
 	// The timestamp coming in doesn´t seem to compare well with micros(),
 	// maybe the two cores have different micros() 
-	timestamp = micros(); 
+	//Serial.printf("0x%08x 0x%08x\n", timestamp, micros());
+	//timestamp = micros(); 
 
 	// channels timed out? 
 	for(auto i = channels.begin(); i != channels.end(); i++) { 
-		if (i->available(id, ibuf, len)) 
+		if (i->available(id, ibuf, len, timestamp)) 
 			onPacket(i->channel, timestamp, i);
 	}
 	for(auto i = channels.begin(); i != channels.end(); i++) { 
-		if (i->add(id, ibuf, len))
+		if (i->add(id, ibuf, len, timestamp))
 			break;
 	}
 }
@@ -341,7 +326,7 @@ void sendCanData() {
 	char sbuf[256];				
 	int age = millis() - isrData.timestamp;
 	snprintf(sbuf, sizeof(sbuf),
-		"P=%f R=%f HDG=%f TRK=%f IAS=%f TAS=%f PALT=%f MODE=%d "
+		"P=%.2f R=%.2f HDG=%.2f TRK=%.2f IAS=%.1f TAS=%.1f PALT=%.1f MODE=%d "
 		"KNOB0=%f KNOB1=%f KNOB2=%f\n",
 		isrData.pitch * 180 / M_PI, isrData.roll * 180 / M_PI, 
 		isrData.magHdg * 180 / M_PI, isrData.magTrack * 180 / M_PI, 
@@ -391,8 +376,8 @@ void openLogFile(const char *filename) {
 
 }
 
-void canToText(const uint8_t *ibuf, int lastId, int mpSize, uint64_t ts, char *obuf, int obufsz) { 
-	snprintf(obuf, obufsz, " (%.6f) can0 %08x [%02d] ", ts / 1000000.0, lastId, mpSize);
+void canToText(const uint8_t *ibuf, int lastId, int mpSize, uint32_t ts, char *obuf, int obufsz) { 
+	snprintf(obuf, obufsz, "%08x %08x %02d ", ts, lastId, mpSize);
 	int outlen = strlen(obuf);
 	for(int n = 0; n < mpSize; n++) {
 		if (n > 0 && (n % 8) == 0) { 
@@ -412,7 +397,8 @@ void canParse(int id, int len, uint32_t timestamp, const uint8_t *ibuf) {
 	static char obuf[1024];
 	if (canSerial) {
 		canToText(ibuf, id, len, timestamp, obuf, sizeof(obuf));
-		Serial.printf("CP "); Serial.print(obuf);
+		Serial.printf("P "); 
+		Serial.print(obuf);
 	}
 
 #if 0 	
@@ -447,11 +433,11 @@ void canParse(int id, int len, uint32_t timestamp, const uint8_t *ibuf) {
 
 	if ((lastId == 0x18882100 || lastId == 0x188c2100) 
 		&& ibuf[0] == 0xdd && ibuf[1] == 0x00 && mpSize >= 52 && ibuf[15] & 0x40) {
-		float thresh = 0.001;
+		float thresh = 0.01;
 		try {
 			float magHdg = floatFromBinary(&ibuf[16]);
 			if (abs(magHdg - lastSent.magHdg) > thresh) { 
-				sendUdpCan("HDG=%.5f\n", magHdg * 180/M_PI);
+				sendUdpCan("HDG=%.2f\n", magHdg * 180/M_PI);
 				lastSent.magHdg = magHdg;
 			}
 			isrData.magHdg = magHdg;
@@ -462,11 +448,11 @@ void canParse(int id, int len, uint32_t timestamp, const uint8_t *ibuf) {
 	if ((lastId == 0x18882100 || lastId == 0x188c2100) 
 	&& ibuf[0] == 0xdd && ibuf[1] == 0x00 && mpSize >= 52  
 	&& ibuf[15] & 0x20) {
-		float thresh = 0.001;
+		float thresh = 0.01;
 		try {
 			float magTrack = floatFromBinary(&ibuf[16]);
 			if (abs(magTrack - lastSent.magTrack) > thresh) {   
-				sendUdpCan("TRK=%.5f\n", magTrack * 180/M_PI);
+				sendUdpCan("TRK=%.2f\n", magTrack * 180/M_PI);
 				lastSent.magTrack = magTrack;
 			}
 			isrData.magTrack = magTrack;
@@ -477,14 +463,14 @@ void canParse(int id, int len, uint32_t timestamp, const uint8_t *ibuf) {
 	} 	
 	if (lastId == 0x18882100 
 		&& ibuf[0] == 0xdd && ibuf[1] == 0x00 && mpSize == 60) {
-		float thresh = 0.00005;
+		float thresh = 0.0005;
 		try {
 			float pitch = floatFromBinary(&ibuf[20]);
 			float roll = floatFromBinary(&ibuf[24]);
 			isrData.timestamp = millis();
 			if (abs(pitch - lastSent.pitch) > thresh || 
 				abs(roll - lastSent.roll) > thresh) {
-				sendUdpCan("P=%f R=%f\n", pitch * 180/M_PI, roll * 180/M_PI);
+				sendUdpCan("P=%.2f R=%.2f\n", pitch * 180/M_PI, roll * 180/M_PI);
 				lastSent.pitch = pitch; 
 				lastSent.roll = roll;
 			}
@@ -526,8 +512,8 @@ void canParse(int id, int len, uint32_t timestamp, const uint8_t *ibuf) {
 		}
 	}
 	*/
-	if (lastId == 0x18882100 && ibuf[0] == 0xdd && ibuf[1] == 0x0a && mpSize >= 40) {
-		float thresh = 0.0;
+	if (lastId == 0x18882100 && ibuf[0] == 0xdd && ibuf[1] == 0x0a && mpSize == 52) {
+		float thresh = 0.1;
 		try {
 			float ias = floatFromBinary(&ibuf[12]); 
 			float tas = floatFromBinary(&ibuf[16]);
@@ -536,7 +522,7 @@ void canParse(int id, int len, uint32_t timestamp, const uint8_t *ibuf) {
 			if (abs(ias - lastSent.ias) > thresh || 
 				abs(tas - lastSent.tas) > thresh || 
 				abs(palt - lastSent.palt) > thresh) { 
-				sendUdpCan("IAS=%f TAS=%f PALT=%f\n", ias / MPS_PER_KNOT, 
+				sendUdpCan("IAS=%.1f TAS=%.1f PALT=%.1f\n", ias / MPS_PER_KNOT, 
 				tas / MPS_PER_KNOT, palt);
 				lastSent.ias = ias;
 				lastSent.tas = tas;
@@ -745,7 +731,7 @@ void loop() {
 	}
 
 	//trimPosAvg.add(analogRead(33));
-	if (pinReportTimer.tick()/* || isrData.forceSend*/) { 
+	if (canReportTimer.tick()/* || isrData.forceSend*/) { 
 		isrData.forceSend = false;
 		//Serial.printf("%08d %d\n", (int)millis(), isrData.mode);
 		sendCanData();
@@ -753,7 +739,8 @@ void loop() {
 	if (1 && serialReportTimer.tick()) {
 		//sendDebugData();
 		char buf[256]; 
-		snprintf(buf, sizeof(buf), "L: %05.3f/%05.3f/%05.3f m:%d app: %d can:%d drop:%d qlen:%d\n", loopTimeAvg.average()/1000.0, loopTimeAvg.min()/1000.0, loopTimeAvg.max()/1000.0, 
+		snprintf(buf, sizeof(buf), "L: %08.3f %05.3f/%05.3f/%05.3f m:%d appkt: %d can:%d drop:%d qlen:%d\n", millis() / 1000.0, 
+		loopTimeAvg.average()/1000.0, loopTimeAvg.min()/1000.0, loopTimeAvg.max()/1000.0, 
 			isrData.mode, autopilotPackets, can->pktCount, can->dropped, can->getQueueLen());
 		Serial.print(buf);
 		fd.print(buf);
