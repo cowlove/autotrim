@@ -1,5 +1,18 @@
 #ifdef UBUNTU
-#include "ESP32sim_ubuntu.h"
+#include "esp32csim.h"
+
+struct CanFrame { 
+	uint32_t identifier;
+	int data_length_code;
+	uint8_t data[8];
+};
+
+static const int TWAI_SPEED_1000KBPS = 0;
+struct FakeESP32Can { 
+	int begin(int, int, int, int, int) { return true; }
+	int readFrame(CanFrame &, int) { return 0; }
+} ESP32Can;
+
 #else
 #include <ESP32-TWAI-CAN.hpp>
 #endif 
@@ -800,7 +813,7 @@ void loop() {
 // the rest of the file is simulation support code 
 
 
-class ESP32sim_autotrim : ESP32sim_Module { 
+class ESP32sim_autotrim : Csim_Module { 
 #ifdef DISCARD
 	ifstream gdl90file; 
 	ifstream trackSimFile;
