@@ -97,9 +97,9 @@ const struct {
 } pins;
 
 
-WiFiUDP udp;
+//WiFiUDP udp;
 //const char *udpHost = "192.168.4.100";
-const char *udpHost = "255.255.255.255";
+//const char *udpHost = "255.255.255.255";
 
 // port schema:  7890 - g5 in 
 //               7891 - g5 out
