@@ -76,13 +76,25 @@ namespace Display {
 const struct PinAssignments { 
 	int ADC = 33;
 	int canTx = 16; /* yellow */
-	int canRx = 17; /* orange */
+	int canRx = 17; /* green */
 	int relay1 = 21;
 	int relay2 = 22;
-	int serialTx = 26; 
-	int serialRx = 25; /* unused */
+	int serialTx = 26; // blue
+	int serialRx = 25; /* brown */
 	int button = 39;
+} pins2;
+
+const struct { 
+	//int ADC = 33;
+	int canTx = 7; /* yellow */
+	int canRx = 8; /* green */
+	//int relay1 = 21;
+	//int relay2 = 22;
+	int serialTx = 9; // blue
+	int serialRx = 10; /* brown */
+	//int button = 39;
 } pins;
+
 
 WiFiUDP udp;
 //const char *udpHost = "192.168.4.100";
@@ -624,17 +636,17 @@ void processCommand(const char *buf, int r) {
 
 void setup() {
 	wdtInit(5);
-	Serial.begin(921600, SERIAL_8N1);
+	Serial.begin(921600);
 	Serial.setTimeout(10);
-	//while(1)  { 
+	while(0)  { 
 		Serial.printf("AUTOTRIM\n");
 		delay(100);
-	//}
+	}
 
 	Serial2.begin(9600, SERIAL_8N1, pins.serialRx, pins.serialTx);
 	Serial2.setTimeout(10);
 	
-	pinMode(pins.button, INPUT_PULLUP);
+	//pinMode(pins.button, INPUT_PULLUP);
 //	pinMode(3,INPUT);
 
 	//adcAttachPin(pins.ADC);

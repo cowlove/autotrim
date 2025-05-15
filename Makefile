@@ -1,9 +1,10 @@
 
 #BOARD=esp32doit-devkit-v1
 #BOARD=heltec_wifi_kit_32
-BOARD=esp32
+BOARD=esp32s3
 #VERBOSE=1
-
+CDC_ON_BOOT=1
+UPLOAD_PORT=/dev/ttyACM0
 GIT_VERSION := "$(shell git describe --abbrev=4 --dirty --always --tags)"
 CHIP=esp32
 OTA_ADDR=192.168.43.222
