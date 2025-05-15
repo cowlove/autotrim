@@ -1,7 +1,7 @@
 #ifdef UBUNTU
 #include "ESP32sim_ubuntu.h"
 #else
-#include <CAN.h>
+#include <ESP32-TWAI-CAN.hpp>
 #endif 
 	
 #include <queue>
@@ -176,74 +176,43 @@ public:
 	int isrCount = 0, pktCount = 0, dropped = 0;
 	void onReceive(	void (*f)(int, int, uint32_t, const uint8_t *)){ onCanPacket = f; }
 	vector<uint32_t> filters;
-	void begin() { 
-		CAN.setPins(pins.canRx, pins.canTx);     
-		if (!CAN.begin(1000E3)) {
+	void begin() {
+		if(!ESP32Can.begin(TWAI_SPEED_1000KBPS, pins.canTx, pins.canRx, 10, 10)) {
 			Serial.println("Starting CAN failed!");
 			while (1) {}
 		}
-		CAN.filter(0,0);
-		const int REG_MOD = 0x0;
-
-		//CAN.loopback();
 		Serial.println("CAN OPENED");
 		instancePtr = this;
-		CAN.onReceive([](int len) { CanWrapper::instancePtr->isr(len); });
-		//CAN.observe();
 }
 	void end() { 
-		CAN.onReceive(NULL);
-		CAN.end();
 	}
 	void reset() { 
-		printf("CAN reset\n");
-		CAN.filter(0,0); 
 	}
 	void run(int timeout, int maxPkts = -1) { 
-		CanPacket *p;
 		char obuf[128];
-		while(maxPkts != 0 && (p = pktQueue.peekTail(timeout)) != NULL) { 
-			CanPacket cp = *p;
-			pktQueue.freeTail();
+		CanFrame cp;
+		while(maxPkts != 0 && ESP32Can.readFrame(cp, 100)) {
+			uint32_t timestamp = millis();
 			if (maxPkts > 0) 
 				maxPkts--;
 
 			if (canSerial) {
-				canToText(cp.buf, cp.id, cp.len, cp.timestamp, obuf, sizeof(obuf));
-				Serial.print("C "); 
-				Serial.print(obuf);
+				//canToText(cp.buf, cp.id, cp.len, cp.timestamp, obuf, sizeof(obuf));
+				//Serial.print("C "); 
+				//Serial.print(obuf);
 			}
 
 			bool filtMatch = false;
 			for(auto f : filters) { 
-				if (cp.id == f)
+				if (cp.identifier == f)
 					filtMatch = true;
 			}
 			if (filtMatch || filters.size() == 0) { 
 				pktCount++;
 				if (onCanPacket != NULL)
-						onCanPacket((int)cp.id, (int)cp.len, (int)cp.timestamp, cp.buf);
+					onCanPacket(cp.identifier, cp.data_length_code, timestamp, cp.data);
 			}
 		}
-	}
-	void isr(int packetSize) {
-		if (packetSize) {
-			CanPacket *pkt = pktQueue.peekHead(0);
-			if (pkt != NULL) {
-				pkt->timestamp = micros();				
-				pkt->id = CAN.packetId();
-				pkt->len = packetSize;
-				if (!CAN.packetRtr()) {
-					for (int n = 0; n < min(packetSize, (int)sizeof(pkt->buf)); n++) {
-						pkt->buf[n] = CAN.read();
-					}
-				}
-				pktQueue.postHead();
-			} else { 
-				dropped++;
-			}
-		}
-		isrCount++;
 	}
 	static CanWrapper *instancePtr;
 };
@@ -790,6 +759,7 @@ void loop() {
 		startupPeriod = 0;
 	
 	if (sl30Heartbeat.tick()) {
+#if 0 
 		if (0) { 
 			//ScopedMutex lock(canMutex);  // panics ISR when ISR blocks too long 
 			CAN.beginExtendedPacket(0x10882200);
@@ -821,6 +791,7 @@ void loop() {
 			//e465011fc92940
 			//e4650113e72a40
 		}	
+#endif // #if 0 
 		std::string s = sl30.pmrrv("301234E"); // send arbitary NAV software version packet as heartbeat
 		Serial2.print(s.c_str());
 		//Serial.print(s.c_str());
