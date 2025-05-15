@@ -2,7 +2,6 @@
 #include "ESP32sim_ubuntu.h"
 #else
 #include <CAN.h>
-#include <TTGO_TS.h>
 #endif 
 	
 #include <queue>
@@ -17,6 +16,11 @@
 //#include "WaypointNav.h"
 #include "espNowMux.h"
 #include "reliableStream.h"
+#include "synchTools.h"
+#include "sl30.h"
+#include "buttonTools.h"
+#include "TTGO_TS.h"
+#include "dataTools.h"
 
 //using namespace WaypointNav;
 //#define LED_PIN 2
@@ -71,12 +75,12 @@ namespace Display {
 // TTGO Schema 
 const struct PinAssignments { 
 	int ADC = 33;
-	int canTx = 32; /* yellow */
-	int canRx = 26; /* purple */
+	int canTx = 16; /* yellow */
+	int canRx = 17; /* orange */
 	int relay1 = 21;
 	int relay2 = 22;
-	int serialTx = 27; 
-	int serialRx = 0; /* unused */
+	int serialTx = 26; 
+	int serialRx = 25; /* unused */
 	int button = 39;
 } pins;
 
@@ -121,7 +125,7 @@ struct DummyLoopTime {
 	void add(float) {}
 } loopTimeAvg;
 uint64_t lastLoopTime = -1;
-EggTimer serialReportTimer(1000), displayTimer(1000);
+EggTimer serialReportTimer(2000), displayTimer(1000);
 EggTimer canReportTimer(1000), canResetTimer(5000), sl30Heartbeat(1000), sdCardFlush(2000);
 
 uint64_t nextCmdTime = 0;
@@ -178,16 +182,23 @@ public:
 			Serial.println("Starting CAN failed!");
 			while (1) {}
 		}
-		Serial.println("CAN OPENED");
 		CAN.filter(0,0);
+		const int REG_MOD = 0x0;
+
+		//CAN.loopback();
+		Serial.println("CAN OPENED");
 		instancePtr = this;
 		CAN.onReceive([](int len) { CanWrapper::instancePtr->isr(len); });
-	}
+		//CAN.observe();
+}
 	void end() { 
 		CAN.onReceive(NULL);
 		CAN.end();
 	}
-	void reset() { CAN.filter(0,0); }
+	void reset() { 
+		printf("CAN reset\n");
+		CAN.filter(0,0); 
+	}
 	void run(int timeout, int maxPkts = -1) { 
 		CanPacket *p;
 		char obuf[128];
@@ -390,7 +401,7 @@ void canToText(const uint8_t *ibuf, int lastId, int mpSize, uint32_t ts, char *o
 	obuf[outlen++] = '\n';
 	obuf[outlen] = 0;				
 }
-
+int serialBytesIn = 0;
 void canParse(int id, int len, uint32_t timestamp, const uint8_t *ibuf) { 
 	int lastId = id;
 	int mpSize = len;
@@ -643,9 +654,7 @@ void processCommand(const char *buf, int r) {
 }
 
 void setup() {
-	esp_task_wdt_init(5, true);
-	esp_task_wdt_add(NULL);
-
+	wdtInit(5);
 	Serial.begin(921600, SERIAL_8N1);
 	Serial.setTimeout(10);
 	//while(1)  { 
@@ -659,7 +668,7 @@ void setup() {
 	pinMode(pins.button, INPUT_PULLUP);
 //	pinMode(3,INPUT);
 
-	adcAttachPin(pins.ADC);
+	//adcAttachPin(pins.ADC);
 	//analogSetCycles(255);
 	//pid.setGains(4, 0, 0);
 	//pid.finalGain = 1;
@@ -690,10 +699,11 @@ EggTimer report(2000);
 
 void loop() {
 	uint64_t now = micros();
-	esp_task_wdt_reset();
+	wdtReset();
+
 	ArduinoOTA.handle();
 	if (otaInProgress) {
-		esp_task_wdt_init(220, true);
+		wdtInit(220);
 		can->reset();
 		return;
 	}
@@ -709,8 +719,9 @@ void loop() {
 	while (Serial2.available()) { 
 		static LineBuffer lb;
 		static char buf[512];
+		serialBytesIn++;
 		int n = Serial2.read(buf, sizeof(buf));
-		Serial.printf("Serial read %d bytes\n", n);
+		//Serial.printf("Serial read %d bytes\n", n);
 		lb.add(buf, n, [](const char *line) {
 			sendUdpCan("NMEA=%s", line);
 			Serial.printf("NMEA: %s\n", line);
@@ -736,14 +747,23 @@ void loop() {
 		//Serial.printf("%08d %d\n", (int)millis(), isrData.mode);
 		sendCanData();
 	}
-	if (1 && serialReportTimer.tick()) {
+
+	if (serialReportTimer.tick()) {
 		//sendDebugData();
 		char buf[256]; 
-		snprintf(buf, sizeof(buf), "L: %08.3f %05.3f/%05.3f/%05.3f m:%d appkt: %d can:%d drop:%d qlen:%d\n", millis() / 1000.0, 
+		snprintf(buf, sizeof(buf), "L: %08.3f %05.3f/%05.3f/%05.3f m:%d appkt: %d can:%d drop:%d qlen:%d serIn:%d canRx:%d canAvail:%d\n", millis() / 1000.0, 
 		loopTimeAvg.average()/1000.0, loopTimeAvg.min()/1000.0, loopTimeAvg.max()/1000.0, 
-			isrData.mode, autopilotPackets, can->pktCount, can->dropped, can->getQueueLen());
+			isrData.mode, autopilotPackets, can->isrCount, can->dropped, can->getQueueLen(), serialBytesIn,
+			0, 0);
 		Serial.print(buf);
 		fd.print(buf);
+		//CAN.dumpRegisters(Serial);
+		//CAN.beginPacket(0x12);
+		//CAN.write('h');
+		//CAN.write('i');
+		//Serial.println("Calling CAN.endPacket()");
+		//CAN.endPacket();
+
 	}
 	
 	if (Serial.available()) {

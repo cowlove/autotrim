@@ -1,15 +1,16 @@
 
 #BOARD=esp32doit-devkit-v1
 #BOARD=heltec_wifi_kit_32
-BOARD=nodemcu-32s
+BOARD=esp32
 #VERBOSE=1
 
 GIT_VERSION := "$(shell git describe --abbrev=4 --dirty --always --tags)"
 CHIP=esp32
 OTA_ADDR=192.168.43.222
 IGNORE_STATE=1
-EXCLUDE_DIRS=/home/jim/Arduino/libraries/TFT_eSPI/|/home/jim/Arduino/libraries/LovyanGFX
+EXCLUDE_DIRS=/home/jim/Arduino/libraries/lvgl/|/home/jim/Arduino/libraries/LovyanGFX
 BUILD_EXTRA_FLAGS += -DGIT_VERSION=\"$(GIT_VERSION)\"
+BUILD_MEMORY_TYPE = qio_qspi
 
 include ${HOME}/Arduino/libraries/makeEspArduino/makeEspArduino.mk
 

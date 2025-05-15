@@ -9,25 +9,25 @@
 using namespace std;
 
 // trim from start
-inline std::string &ltrim(std::string &s) {
+inline static std::string &ltrim(std::string &s) {
     s.erase(s.begin(), std::find_if(s.begin(), s.end(),
             std::not1(std::ptr_fun<int, int>(std::isspace))));
     return s;
 }
 
 // trim from end
-inline std::string &rtrim(std::string &s) {
+inline static std::string &rtrim(std::string &s) {
     s.erase(std::find_if(s.rbegin(), s.rend(),
             std::not1(std::ptr_fun<int, int>(std::isspace))).base(), s.end());
     return s;
 }
 
 // trim from both ends
-inline std::string &trim(std::string &s) {
+inline static std::string &trim(std::string &s) {
     return ltrim(rtrim(s));
 }
 
-vector<string> split(const char *line, const char *delim) {
+static vector<string> split(const char *line, const char *delim) {
   char *buf = strdup(line); 
   std::vector<string> rval;
   for(char *w = strtok(buf, delim); w != NULL; w = strtok(NULL, delim)) {
