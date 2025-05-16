@@ -8,6 +8,10 @@ GIT_VERSION := "$(shell git describe --abbrev=6 --dirty --always)"
 
 ifeq (${BOARD},esp32s3)
 	CDC_ON_BOOT=1
+	BUILD_MEMORY_TYPE=qio_opi
+endif
+ifeq (${BOARD},esp32)
+	BUILD_MEMORY_TYPE=qio_qspi
 endif
 
 BUILD_EXTRA_FLAGS += -DGIT_VERSION=\"$(GIT_VERSION)\" 

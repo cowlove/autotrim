@@ -85,6 +85,7 @@ namespace Display {
 //
 //
 
+
 // esp32 board
 const struct { 
 	int ADC = 33;
@@ -99,15 +100,48 @@ const struct {
 
 // esp32s3 board
 const struct { 
-	//int ADC = 33;
 	int canTx = 7; /* yellow */
 	int canRx = 8; /* green */
-	//int relay1 = 21;
-	//int relay2 = 22;
 	int serialTx = 9; // blue
 	int serialRx = 10; /* brown */
-	//int button = 39;
+	int led = 2;
 } pins;
+
+#include "ulp.h"
+#include "soc/rtc_io_reg.h"
+#include "driver/rtc_io.h"
+void ulp_go() { 
+	int pin = rtc_io_number_get(GPIO_NUM_2);
+	rtc_gpio_init(GPIO_NUM_2);
+	rtc_gpio_init(GPIO_NUM_2);
+	rtc_gpio_set_direction(GPIO_NUM_2, RTC_GPIO_MODE_OUTPUT_ONLY);
+	Serial.printf("rtc_io %d\n", pin);
+	const ulp_insn_t program[] = {
+		M_LABEL(1),
+		I_WR_REG(RTC_GPIO_OUT_REG, 
+				pin + RTC_GPIO_OUT_DATA_S, 
+				pin + RTC_GPIO_OUT_DATA_S, 1),  // LED ON
+		I_MOVI(R0, 100),
+		M_LABEL(2),
+		I_DELAY(5000),
+		I_SUBI(R0, R0, 1),
+		M_BGE(2, 1),
+		I_WR_REG(RTC_GPIO_OUT_REG, 
+			pin + RTC_GPIO_OUT_DATA_S, 
+			pin + RTC_GPIO_OUT_DATA_S, 0),  // LED OFF
+		I_MOVI(R0, 100),
+		M_LABEL(3),
+		I_DELAY(50000),
+		I_SUBI(R0, R0, 1),
+		M_BGE(3, 1),
+		M_BX(1),
+	};
+
+	size_t load_addr = 0;
+	size_t size = sizeof(program)/sizeof(ulp_insn_t);
+	ulp_process_macros_and_load(load_addr, program, &size);
+	ulp_run(load_addr);
+}
 
 
 //WiFiUDP udp;
@@ -207,7 +241,7 @@ public:
 		}
 		Serial.println("CAN OPENED");
 		instancePtr = this;
-}
+	}
 	void end() { 
 	}
 	void reset() { 
@@ -636,13 +670,15 @@ void processCommand(const char *buf, int r) {
 }
 
 void setup() {
-	wdtInit(5);
-	Serial.begin(921600);
+	wdtInit(15);
+	//pinMode(pins.led, OUTPUT);
+	//digitalWrite(pins.led, 1);
+	Serial.begin(115200);//921600);
 	Serial.setTimeout(10);
-	while(0)  { 
-		Serial.printf("AUTOTRIM\n");
-		delay(100);
-	}
+	Serial.printf("AUTOTRIM\n");
+	//ulp_go();
+	//delay(5000);
+	//deepSleep(2000);
 
 	Serial2.begin(9600, SERIAL_8N1, pins.serialRx, pins.serialTx);
 	Serial2.setTimeout(10);
@@ -654,13 +690,6 @@ void setup() {
 	//analogSetCycles(255);
 	//pid.setGains(4, 0, 0);
 	//pid.finalGain = 1;
-
-#if 0 	
-	espNowMux.registerReadCallback("g5", 
-        [](const uint8_t *mac, const uint8_t *data, int len){
-			processCommand((char *)data, len);
-    });
-#endif
 
 	can = new CanWrapper();
 	can->onReceive(canSort);
@@ -730,7 +759,7 @@ void loop() {
 	}
 
 	if (serialReportTimer.tick()) {
-		//sendDebugData();
+		//digitalWrite(pins.led, !digitalRead(pins.led));
 		char buf[256]; 
 		snprintf(buf, sizeof(buf), "L: %08.3f %05.3f/%05.3f/%05.3f m:%d appkt: %d can:%d drop:%d qlen:%d serIn:%d canRx:%d canAvail:%d\n", millis() / 1000.0, 
 		loopTimeAvg.average()/1000.0, loopTimeAvg.min()/1000.0, loopTimeAvg.max()/1000.0, 
