@@ -1,5 +1,7 @@
-#ifdef UBUNTU
+#ifdef CSIM
 #include "esp32csim.h"
+#endif
+#ifdef XUBUNTU
 
 struct CanFrame { 
 	uint32_t identifier;
@@ -107,6 +109,7 @@ const struct {
 	int led = 2;
 } pins;
 
+#if 0
 #include "ulp.h"
 #include "soc/rtc_io_reg.h"
 #include "driver/rtc_io.h"
@@ -142,7 +145,7 @@ void ulp_go() {
 	ulp_process_macros_and_load(load_addr, program, &size);
 	ulp_run(load_addr);
 }
-
+#endif
 
 //WiFiUDP udp;
 //const char *udpHost = "192.168.4.100";
@@ -212,7 +215,7 @@ struct IsrData {
 } isrData, lastSent;
 
 float knobValues[10];
-int canSerial = 0;
+int canSerial = 1;
 void canToText(const uint8_t *ibuf, int lastId, int mpSize, uint32_t ts, char *obuf, int obufsz);
 
 class CanWrapper {
@@ -239,7 +242,7 @@ public:
 			Serial.println("Starting CAN failed!");
 			while (1) {}
 		}
-		Serial.println("CAN OPENED");
+		//Serial.println("CAN OPENED");
 		instancePtr = this;
 	}
 	void end() { 
@@ -250,6 +253,13 @@ public:
 		char obuf[128];
 		CanFrame cp;
 		while(maxPkts != 0 && ESP32Can.readFrame(cp, 100)) {
+			Serial.printf("CAN %08" PRIx32 " %08" PRIx32 " %08" PRIx32 " %1d",
+				micros(), cp.flags, cp.identifier, cp.data_length_code);
+			if (cp.rtr == 0) {
+				for (int n = 0; n < cp.data_length_code; n++) 
+				Serial.printf(" %02x", cp.data[n]);
+			}
+			Serial.print("\n");
 			uint32_t timestamp = millis();
 			if (maxPkts > 0) 
 				maxPkts--;
@@ -365,11 +375,13 @@ void sendCanData() {
 	int age = millis() - isrData.timestamp;
 	snprintf(sbuf, sizeof(sbuf),
 		"P=%.2f R=%.2f HDG=%.2f TRK=%.2f IAS=%.1f TAS=%.1f PALT=%.1f MODE=%d "
-		"KNOB0=%f KNOB1=%f KNOB2=%f\n",
+		"K=%.2f %.2f %.2f %.2f %.2f %.2f\n",
 		isrData.pitch * 180 / M_PI, isrData.roll * 180 / M_PI, 
 		isrData.magHdg * 180 / M_PI, isrData.magTrack * 180 / M_PI, 
 		isrData.ias / MPS_PER_KNOT, isrData.tas / MPS_PER_KNOT, 
-		isrData.palt, isrData.mode, knobValues[0], knobValues[1], knobValues[2]);
+		isrData.palt, isrData.mode, 
+		knobValues[0], knobValues[1], knobValues[2],
+		knobValues[3], knobValues[4], knobValues[5]);
 	//snprintf(sbuf, sizeof(sbuf), "%+06.3f %+06.3f %+06.3f %+06.3f %+06.3f %+06.3f %+06.3f %d %+06.3f %d %d CAN\n", 
 	//	isrData.pitch, isrData.roll, isrData.magHdg, isrData.magTrack, isrData.ias, isrData.tas, 
 	//	isrData.palt, isrData.knobSel, isrData.knobVal, age, isrData.mode);
@@ -508,7 +520,7 @@ void canParse(int id, int len, uint32_t timestamp, const uint8_t *ibuf) {
 			isrData.timestamp = millis();
 			if (abs(pitch - lastSent.pitch) > thresh || 
 				abs(roll - lastSent.roll) > thresh) {
-				sendData("P=%.2f R=%.2f\n", pitch * 180/M_PI, roll * 180/M_PI);
+				sendData("XP=%.2f R=%.2f\n", (float)(pitch * 180/M_PI), (float)(roll * 180/M_PI));
 				lastSent.pitch = pitch; 
 				lastSent.roll = roll;
 			}
@@ -575,7 +587,9 @@ void canParse(int id, int len, uint32_t timestamp, const uint8_t *ibuf) {
 		}
 		//sendCanData(false);
 	}
-	if ((lastId == 0x10882200 || lastId == 0x108c2200) 
+	if ((lastId == 0x10882200 || lastId == 0x108c2200
+		|| lastId == 0x10882100 || lastId == 0x108c2100
+		) 
 		&& ibuf[0] == 0xe4 && ibuf[1] == 0x65 && mpSize == 7) {
 		try {
 			double knobVal = floatFromBinary(&ibuf[3]);
@@ -592,7 +606,7 @@ void canParse(int id, int len, uint32_t timestamp, const uint8_t *ibuf) {
 			isrData.knobSel = isrData.knobVal = 0;
 			isrData.exceptions++; 
 		}
-		//Serial.printf("Knob %d val %f\n", (int)isrData.knobSel, isrData.knobVal);
+		Serial.printf("Knob %d val %f\n", (int)isrData.knobSel, isrData.knobVal);
 		isrData.forceSend = true;
 		//sendCanData(true);
 	}
@@ -673,7 +687,7 @@ void setup() {
 	wdtInit(15);
 	//pinMode(pins.led, OUTPUT);
 	//digitalWrite(pins.led, 1);
-	Serial.begin(115200);//921600);
+	Serial.begin(921600);
 	Serial.setTimeout(10);
 	Serial.printf("AUTOTRIM\n");
 	//ulp_go();
@@ -701,8 +715,10 @@ void setup() {
 	channels.push_back(CanChannel(0x188c2100, -1, 0xdd000000, 0xfff00000));
 	channels.push_back(CanChannel(0x18882200, -1, 0xdd000000, 0xfff00000));
 	channels.push_back(CanChannel(0x188c2200, -1, 0xdd000000, 0xfff00000));
-	channels.push_back(CanChannel(0x10882200, -1, 0xe4650000, 0xffff0000));
-	channels.push_back(CanChannel(0x108c2200, -1, 0xe4650000, 0xffff0000));
+	//channels.push_back(CanChannel(0x10882200, -1, 0xe4650000, 0xffff0000));
+	//channels.push_back(CanChannel(0x108c2200, -1, 0xe4650000, 0xffff0000));
+	channels.push_back(CanChannel(0x10882200, -1, 0x0, 0x0));
+	channels.push_back(CanChannel(0x108c2200, -1, 0x0, 0x0));
 	channels.push_back(CanChannel(0, 0));
 	can->begin();
 }

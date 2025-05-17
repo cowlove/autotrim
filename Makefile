@@ -25,8 +25,10 @@ UPLOAD_PORT ?= /dev/ttyACM0
 ifeq ($(BOARD),csim)
 SKETCH_NAME=$(shell basename `pwd`)
 CSIM_BUILD_DIR=./build/csim
-CSIM_LIBS=Arduino_CRC32 ArduinoJson Adafruit_HX711 esp32jimlib
+CSIM_LIBS+=Arduino_CRC32 ArduinoJson Adafruit_HX711 esp32jimlib
 CSIM_LIBS+=esp32csim
+CSIM_LIBS+=ESP32-TWAI-CAN
+
 CSIM_SRC_DIRS=$(foreach L,$(CSIM_LIBS),${HOME}/Arduino/libraries/${L}/src)
 CSIM_SRC_DIRS+=$(foreach L,$(CSIM_LIBS),${HOME}/Arduino/libraries/${L})
 CSIM_SRC_DIRS+=$(foreach L,$(CSIM_LIBS),${HOME}/Arduino/libraries/${L}/src/csim_include)
@@ -69,7 +71,7 @@ else
 endif
 
 cat:    
-	while sleep .01; do if [ -c ${PORT} ]; then stty -F ${PORT} -echo raw 115200 && cat ${PORT}; fi; done  | tee ./cat.`basename ${PORT}`.out
+	while sleep .01; do if [ -c ${PORT} ]; then stty -F ${PORT} -echo raw 921600 && cat ${PORT}; fi; done  | tee ./cat.`basename ${PORT}`.out
 socat:  
 	socat udp-recvfrom:9000,fork - 
 mocat:
