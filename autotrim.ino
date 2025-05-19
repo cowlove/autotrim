@@ -1,23 +1,7 @@
 #ifdef CSIM
 #include "esp32csim.h"
 #endif
-#ifdef XUBUNTU
-
-struct CanFrame { 
-	uint32_t identifier;
-	int data_length_code;
-	uint8_t data[8];
-};
-
-static const int TWAI_SPEED_1000KBPS = 0;
-struct FakeESP32Can { 
-	int begin(int, int, int, int, int) { return true; }
-	int readFrame(CanFrame &, int) { return 0; }
-} ESP32Can;
-
-#else
-#include <ESP32-TWAI-CAN.hpp>
-#endif 
+#include "driver/twai.h"
 	
 #include <queue>
 #include <string>
@@ -238,10 +222,20 @@ public:
 	void onReceive(	void (*f)(int, int, uint32_t, const uint8_t *)){ onCanPacket = f; }
 	vector<uint32_t> filters;
 	void begin() {
-		if(!ESP32Can.begin(TWAI_SPEED_1000KBPS, pins.canTx, pins.canRx, 10, 10)) {
-			Serial.println("Starting CAN failed!");
-			while (1) {}
-		}
+		twai_general_config_t g_config = {.mode = TWAI_MODE_NORMAL, 
+			.tx_io = (gpio_num_t) pins.canTx, 
+			.rx_io = (gpio_num_t) pins.canRx, \
+			.clkout_io = TWAI_IO_UNUSED, .bus_off_io = TWAI_IO_UNUSED,      \
+			.tx_queue_len = 1, .rx_queue_len = 32,       \
+			.alerts_enabled = TWAI_ALERT_NONE,  
+			.clkout_divider = 0,        \
+			.intr_flags = ESP_INTR_FLAG_LEVEL1
+		};
+        twai_filter_config_t f_config = TWAI_FILTER_CONFIG_ACCEPT_ALL();
+		twai_timing_config_t t_config = TWAI_TIMING_CONFIG_1MBITS();
+
+		twai_driver_install(&g_config, &t_config, &f_config);
+		twai_start();
 		//Serial.println("CAN OPENED");
 		instancePtr = this;
 	}
@@ -251,8 +245,8 @@ public:
 	}
 	void run(int timeout, int maxPkts = -1) { 
 		char obuf[128];
-		CanFrame cp;
-		while(maxPkts != 0 && ESP32Can.readFrame(cp, 100)) {
+		twai_message_t cp;
+		while(maxPkts != 0 && twai_receive(&cp, pdMS_TO_TICKS(100)) == ESP_OK) {
 			Serial.printf("CAN %08" PRIx32 " %08" PRIx32 " %08" PRIx32 " %1d",
 				micros(), cp.flags, cp.identifier, cp.data_length_code);
 			if (cp.rtr == 0) {
@@ -587,9 +581,7 @@ void canParse(int id, int len, uint32_t timestamp, const uint8_t *ibuf) {
 		}
 		//sendCanData(false);
 	}
-	if ((lastId == 0x10882200 || lastId == 0x108c2200
-		|| lastId == 0x10882100 || lastId == 0x108c2100
-		) 
+	if ((lastId == 0x10882200 || lastId == 0x108c2200) 
 		&& ibuf[0] == 0xe4 && ibuf[1] == 0x65 && mpSize == 7) {
 		try {
 			double knobVal = floatFromBinary(&ibuf[3]);
@@ -783,6 +775,36 @@ void loop() {
 			0, 0);
 		Serial.print(buf);
 		fd.print(buf);
+
+
+		twai_message_t p;
+		static bool alternate = 0;
+		alternate = !alternate;
+
+
+		p.flags = 0x1; 
+		//p.identifier = 0x108a2222; // net err conflict
+		//p.identifier = 0x108e2222; // no conflict 
+		//p.identifier = 0x108c2200; // no conflict
+		//p.identifier = 0x10882200; // network err conflict 
+		p.identifier = 0x108c2222;
+		p.data_length_code = 7;
+		p.data[0] = 0xe4;
+		p.data[1] = 0x65;
+		p.data[2] = 0x00;
+		if (alternate) { 
+			p.data[3] = 0x28;
+			p.data[4] = 0x17;
+			p.data[5] = 0xc6;
+			p.data[6] = 0x47;
+		} else { 
+			p.data[3] = 0x17;
+			p.data[4] = 0x28;
+			p.data[5] = 0xc6;
+			p.data[6] = 0x47;
+		}
+		int r = twai_transmit(&p, pdMS_TO_TICKS(100));
+		printf("twai_transmit returned %d\n", r);
 	}
 	
 	static int startupPeriod = 20000;
