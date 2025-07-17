@@ -9,7 +9,7 @@ GIT_VERSION := "$(shell git describe --abbrev=4 --dirty --always --tags)"
 CHIP=esp32
 OTA_ADDR=192.168.43.222
 IGNORE_STATE=1
-EXCLUDE_DIRS=/home/jim/Arduino/libraries/lvgl/|/home/jim/Arduino/libraries/LovyanGFX
+EXCLUDE_DIRS=/home/jim/Arduino/libraries/lvgl/|/home/jim/Arduino/libraries/LovyanGFX|${HOME}/Arduino/libraries/esp32csim
 BUILD_EXTRA_FLAGS += -DGIT_VERSION=\"$(GIT_VERSION)\"
 BUILD_MEMORY_TYPE = qio_qspi
 

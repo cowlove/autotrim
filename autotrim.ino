@@ -72,27 +72,12 @@ namespace Display {
 //
 //
 
-// TTGO Schema 
-const struct PinAssignments { 
-	int ADC = 33;
-	int canTx = 16; /* yellow */
-	int canRx = 17; /* green */
-	int relay1 = 21;
-	int relay2 = 22;
-	int serialTx = 26; // blue
-	int serialRx = 25; /* brown */
-	int button = 39;
-} pins2;
 
 const struct { 
-	//int ADC = 33;
-	int canTx = 7; /* yellow */
+	int canTx = 9; /* yellow */
 	int canRx = 8; /* green */
-	//int relay1 = 21;
-	//int relay2 = 22;
-	int serialTx = 9; // blue
-	int serialRx = 10; /* brown */
-	//int button = 39;
+	int serialTx = 7; // blue
+	int serialRx = 44; /* brown */
 } pins;
 
 
@@ -639,8 +624,14 @@ void setup() {
 	Serial.begin(921600);
 	Serial.setTimeout(10);
 	while(0)  { 
-		Serial.printf("AUTOTRIM\n");
-		delay(100);
+		int p = pins.serialRx;
+		Serial.printf("AUTOTRIM %d\n", p);
+		pinMode(p, OUTPUT);
+		digitalWrite(p, 1);
+		delay(1000);
+		digitalWrite(p, 0);
+		delay(1000);
+		wdtReset();
 	}
 
 	Serial2.begin(9600, SERIAL_8N1, pins.serialRx, pins.serialTx);
