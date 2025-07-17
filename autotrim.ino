@@ -1,8 +1,7 @@
-#ifdef UBUNTU
-#include "ESP32sim_ubuntu.h"
-#else
-#include <ESP32-TWAI-CAN.hpp>
-#endif 
+#ifdef CSIM
+#include "esp32csim.h"
+#endif
+#include "driver/twai.h"
 	
 #include <queue>
 #include <string>
@@ -73,6 +72,7 @@ namespace Display {
 //
 
 
+// esp32s3 board
 const struct { 
 	int canTx = 9; /* yellow */
 	int canRx = 8; /* green */
@@ -80,10 +80,47 @@ const struct {
 	int serialRx = 44; /* brown */
 } pins;
 
+#if 0
+#include "ulp.h"
+#include "soc/rtc_io_reg.h"
+#include "driver/rtc_io.h"
+void ulp_go() { 
+	int pin = rtc_io_number_get(GPIO_NUM_2);
+	rtc_gpio_init(GPIO_NUM_2);
+	rtc_gpio_init(GPIO_NUM_2);
+	rtc_gpio_set_direction(GPIO_NUM_2, RTC_GPIO_MODE_OUTPUT_ONLY);
+	Serial.printf("rtc_io %d\n", pin);
+	const ulp_insn_t program[] = {
+		M_LABEL(1),
+		I_WR_REG(RTC_GPIO_OUT_REG, 
+				pin + RTC_GPIO_OUT_DATA_S, 
+				pin + RTC_GPIO_OUT_DATA_S, 1),  // LED ON
+		I_MOVI(R0, 100),
+		M_LABEL(2),
+		I_DELAY(5000),
+		I_SUBI(R0, R0, 1),
+		M_BGE(2, 1),
+		I_WR_REG(RTC_GPIO_OUT_REG, 
+			pin + RTC_GPIO_OUT_DATA_S, 
+			pin + RTC_GPIO_OUT_DATA_S, 0),  // LED OFF
+		I_MOVI(R0, 100),
+		M_LABEL(3),
+		I_DELAY(50000),
+		I_SUBI(R0, R0, 1),
+		M_BGE(3, 1),
+		M_BX(1),
+	};
 
-WiFiUDP udp;
+	size_t load_addr = 0;
+	size_t size = sizeof(program)/sizeof(ulp_insn_t);
+	ulp_process_macros_and_load(load_addr, program, &size);
+	ulp_run(load_addr);
+}
+#endif
+
+//WiFiUDP udp;
 //const char *udpHost = "192.168.4.100";
-const char *udpHost = "255.255.255.255";
+//const char *udpHost = "255.255.255.255";
 
 // port schema:  7890 - g5 in 
 //               7891 - g5 out
@@ -97,8 +134,6 @@ const char *udpHost = "255.255.255.255";
 // 4: NAV mode
 // 5: CDI needle test movement
 // 6: CAN data udp dump (port 7894) 
-
-int udpPortIn = 7892;
 
 SL30 sl30;
 
@@ -129,13 +164,13 @@ uint64_t nextCmdTime = 0;
 static bool debugMoveNeedles = false;
 
 static bool first = true;
-ReliableStreamESPNow autopilot("G5");
-static int autopilotPackets = 0;
+ReliableStreamESPNow espnow("G5");
+static int espnowPackets = 0;
 
 // send udp packet multiple times on broadcast address and all addresses in normal EchoUAT wifi range 
 void superSend(const char *b) { 
-	autopilot.write(string(b));
-	autopilotPackets++;
+	espnow.write(string(b));
+	espnowPackets++;
 	Serial.print(b);
 }
 
@@ -151,7 +186,7 @@ struct IsrData {
 } isrData, lastSent;
 
 float knobValues[10];
-int canSerial = 0;
+int canSerial = 1;
 void canToText(const uint8_t *ibuf, int lastId, int mpSize, uint32_t ts, char *obuf, int obufsz);
 
 class CanWrapper {
@@ -174,21 +209,38 @@ public:
 	void onReceive(	void (*f)(int, int, uint32_t, const uint8_t *)){ onCanPacket = f; }
 	vector<uint32_t> filters;
 	void begin() {
-		if(!ESP32Can.begin(TWAI_SPEED_1000KBPS, pins.canTx, pins.canRx, 10, 10)) {
-			Serial.println("Starting CAN failed!");
-			while (1) {}
-		}
-		Serial.println("CAN OPENED");
+		twai_general_config_t g_config = {.mode = TWAI_MODE_NORMAL, 
+			.tx_io = (gpio_num_t) pins.canTx, 
+			.rx_io = (gpio_num_t) pins.canRx, \
+			.clkout_io = TWAI_IO_UNUSED, .bus_off_io = TWAI_IO_UNUSED,      \
+			.tx_queue_len = 1, .rx_queue_len = 32,       \
+			.alerts_enabled = TWAI_ALERT_NONE,  
+			.clkout_divider = 0,        \
+			.intr_flags = ESP_INTR_FLAG_LEVEL1
+		};
+        twai_filter_config_t f_config = TWAI_FILTER_CONFIG_ACCEPT_ALL();
+		twai_timing_config_t t_config = TWAI_TIMING_CONFIG_1MBITS();
+
+		twai_driver_install(&g_config, &t_config, &f_config);
+		twai_start();
+		//Serial.println("CAN OPENED");
 		instancePtr = this;
-}
+	}
 	void end() { 
 	}
 	void reset() { 
 	}
 	void run(int timeout, int maxPkts = -1) { 
 		char obuf[128];
-		CanFrame cp;
-		while(maxPkts != 0 && ESP32Can.readFrame(cp, 100)) {
+		twai_message_t cp;
+		while(maxPkts != 0 && twai_receive(&cp, pdMS_TO_TICKS(100)) == ESP_OK) {
+			Serial.printf("CAN %08" PRIx32 " %08" PRIx32 " %08" PRIx32 " %1d",
+				micros(), cp.flags, cp.identifier, cp.data_length_code);
+			if (cp.rtr == 0) {
+				for (int n = 0; n < cp.data_length_code; n++) 
+				Serial.printf(" %02x", cp.data[n]);
+			}
+			Serial.print("\n");
 			uint32_t timestamp = millis();
 			if (maxPkts > 0) 
 				maxPkts--;
@@ -290,7 +342,7 @@ void sendDebugData() {
 	//Serial.printf(sbuf);
 }
 
-void sendUdpCan(const char *format, ...) { 
+void sendData(const char *format, ...) { 
     va_list args;
     va_start(args, format);
 	char buf[128];
@@ -304,11 +356,13 @@ void sendCanData() {
 	int age = millis() - isrData.timestamp;
 	snprintf(sbuf, sizeof(sbuf),
 		"P=%.2f R=%.2f HDG=%.2f TRK=%.2f IAS=%.1f TAS=%.1f PALT=%.1f MODE=%d "
-		"KNOB0=%f KNOB1=%f KNOB2=%f\n",
+		"K=%.2f %.2f %.2f %.2f %.2f %.2f\n",
 		isrData.pitch * 180 / M_PI, isrData.roll * 180 / M_PI, 
 		isrData.magHdg * 180 / M_PI, isrData.magTrack * 180 / M_PI, 
 		isrData.ias / MPS_PER_KNOT, isrData.tas / MPS_PER_KNOT, 
-		isrData.palt, isrData.mode, knobValues[0], knobValues[1], knobValues[2]);
+		isrData.palt, isrData.mode, 
+		knobValues[0], knobValues[1], knobValues[2],
+		knobValues[3], knobValues[4], knobValues[5]);
 	//snprintf(sbuf, sizeof(sbuf), "%+06.3f %+06.3f %+06.3f %+06.3f %+06.3f %+06.3f %+06.3f %d %+06.3f %d %d CAN\n", 
 	//	isrData.pitch, isrData.roll, isrData.magHdg, isrData.magTrack, isrData.ias, isrData.tas, 
 	//	isrData.palt, isrData.knobSel, isrData.knobVal, age, isrData.mode);
@@ -398,7 +452,7 @@ void canParse(int id, int len, uint32_t timestamp, const uint8_t *ibuf) {
 		try {
 			float palt = floatFromBinary(&ibuf[64]);
 			if (abs(palt - lastSent.palt) > thresh && palt > 200) { 
-				sendUdpCan("PALT=%.5f\n", palt);
+				sendData("PALT=%.5f\n", palt);
 				lastSent.palt = palt;
 				isrData.palt = palt;
 			}
@@ -414,7 +468,7 @@ void canParse(int id, int len, uint32_t timestamp, const uint8_t *ibuf) {
 		try {
 			float magHdg = floatFromBinary(&ibuf[16]);
 			if (abs(magHdg - lastSent.magHdg) > thresh) { 
-				sendUdpCan("HDG=%.2f\n", magHdg * 180/M_PI);
+				sendData("HDG=%.2f\n", magHdg * 180/M_PI);
 				lastSent.magHdg = magHdg;
 			}
 			isrData.magHdg = magHdg;
@@ -429,7 +483,7 @@ void canParse(int id, int len, uint32_t timestamp, const uint8_t *ibuf) {
 		try {
 			float magTrack = floatFromBinary(&ibuf[16]);
 			if (abs(magTrack - lastSent.magTrack) > thresh) {   
-				sendUdpCan("TRK=%.2f\n", magTrack * 180/M_PI);
+				sendData("TRK=%.2f\n", magTrack * 180/M_PI);
 				lastSent.magTrack = magTrack;
 			}
 			isrData.magTrack = magTrack;
@@ -447,7 +501,7 @@ void canParse(int id, int len, uint32_t timestamp, const uint8_t *ibuf) {
 			isrData.timestamp = millis();
 			if (abs(pitch - lastSent.pitch) > thresh || 
 				abs(roll - lastSent.roll) > thresh) {
-				sendUdpCan("P=%.2f R=%.2f\n", pitch * 180/M_PI, roll * 180/M_PI);
+				sendData("XP=%.2f R=%.2f\n", (float)(pitch * 180/M_PI), (float)(roll * 180/M_PI));
 				lastSent.pitch = pitch; 
 				lastSent.roll = roll;
 			}
@@ -466,7 +520,7 @@ void canParse(int id, int len, uint32_t timestamp, const uint8_t *ibuf) {
 		try {
 			float slip = floatFromBinary(&ibuf[12]); 
 			if (slip != lastSent.slip) {
-				sendUdpCan("SL=%f", slip * 180/M_PI);
+				sendData("SL=%f", slip * 180/M_PI);
 				lastSent.slip = slip;
 			}
 			isrData.slip = slip;
@@ -481,7 +535,7 @@ void canParse(int id, int len, uint32_t timestamp, const uint8_t *ibuf) {
 		try {
 			float palt = floatFromBinary(&ibuf[28]);
 			isrData.palt = palt;
-			sendUdpCan("PALT=%f", palt);
+			sendData("PALT=%f", palt);
 			Serial.printf("PALT=%f\n", palt);
 		} catch(...) {
 			isrData.ias = isrData.tas = isrData.palt = 0; 
@@ -499,7 +553,7 @@ void canParse(int id, int len, uint32_t timestamp, const uint8_t *ibuf) {
 			if (abs(ias - lastSent.ias) > thresh || 
 				abs(tas - lastSent.tas) > thresh || 
 				abs(palt - lastSent.palt) > thresh) { 
-				sendUdpCan("IAS=%.1f TAS=%.1f PALT=%.1f\n", ias / MPS_PER_KNOT, 
+				sendData("IAS=%.1f TAS=%.1f PALT=%.1f\n", ias / MPS_PER_KNOT, 
 				tas / MPS_PER_KNOT, palt);
 				lastSent.ias = ias;
 				lastSent.tas = tas;
@@ -524,14 +578,14 @@ void canParse(int id, int len, uint32_t timestamp, const uint8_t *ibuf) {
 			if (knobSel >= 0 && knobSel < sizeof(knobValues)/sizeof(knobValues[0]))
 				knobValues[knobSel] = knobVal;
 			Serial.printf("KNOB%d=%f\n", knobSel, knobVal);
-			sendUdpCan("KNOB%d=%f\n", knobSel, knobVal);
+			sendData("KNOB%d=%f\n", knobSel, knobVal);
 			if (knobSel > 0 && knobSel < sizeof(g5KnobValues)/sizeof(g5KnobValues[0]))
 				g5KnobValues[knobSel] = knobVal;
 		} catch(...) {
 			isrData.knobSel = isrData.knobVal = 0;
 			isrData.exceptions++; 
 		}
-		//Serial.printf("Knob %d val %f\n", (int)isrData.knobSel, isrData.knobVal);
+		Serial.printf("Knob %d val %f\n", (int)isrData.knobSel, isrData.knobVal);
 		isrData.forceSend = true;
 		//sendCanData(true);
 	}
@@ -550,10 +604,10 @@ void canParse(int id, int len, uint32_t timestamp, const uint8_t *ibuf) {
 		}
 		if (oneDegree && ((delta > 0 && evenMode) || (delta < 0 && !evenMode))) {
 			isrData.mode++;
-			sendUdpCan("MODE=%d\n", isrData.mode);
+			sendData("MODE=%d\n", isrData.mode);
 		} else if (isrData.mode != 0) { 
 			isrData.mode = 0;
-			sendUdpCan("MODE=%d\n", isrData.mode);
+			sendData("MODE=%d\n", isrData.mode);
 		}
 		lastKnobVal = isrData.knobVal;
 	}	
@@ -563,17 +617,6 @@ void canParse(int id, int len, uint32_t timestamp, const uint8_t *ibuf) {
 		fd.write(obuf, strlen(obuf));
 		if (sdCardFlush.tick()) 
 			fd.flush();
-	}
-
-	if (udpCanOut) { 
-		if (udp.beginPacket("255.255.255.255", 7894) == 0) 
-			isrData.udpErrs++;
-		udp.write((uint8_t *)&id, sizeof(id));
-		udp.write((uint8_t *)&len, sizeof(len));
-		udp.write((const uint8_t*)ibuf, len);
-		if (udp.endPacket() == 0) 
-			isrData.udpErrs++;
-		isrData.udpSent++;
 	}
 }
 
@@ -620,7 +663,9 @@ void processCommand(const char *buf, int r) {
 }
 
 void setup() {
-	wdtInit(5);
+	wdtInit(15);
+	//pinMode(pins.led, OUTPUT);
+	//digitalWrite(pins.led, 1);
 	Serial.begin(921600);
 	Serial.setTimeout(10);
 	while(0)  { 
@@ -645,13 +690,6 @@ void setup() {
 	//pid.setGains(4, 0, 0);
 	//pid.finalGain = 1;
 
-#if 0 	
-	espNowMux.registerReadCallback("g5", 
-        [](const uint8_t *mac, const uint8_t *data, int len){
-			processCommand((char *)data, len);
-    });
-#endif
-
 	can = new CanWrapper();
 	can->onReceive(canSort);
 	//can->filters.push_back(0x18882100);
@@ -662,8 +700,10 @@ void setup() {
 	channels.push_back(CanChannel(0x188c2100, -1, 0xdd000000, 0xfff00000));
 	channels.push_back(CanChannel(0x18882200, -1, 0xdd000000, 0xfff00000));
 	channels.push_back(CanChannel(0x188c2200, -1, 0xdd000000, 0xfff00000));
-	channels.push_back(CanChannel(0x10882200, -1, 0xe4650000, 0xffff0000));
-	channels.push_back(CanChannel(0x108c2200, -1, 0xe4650000, 0xffff0000));
+	//channels.push_back(CanChannel(0x10882200, -1, 0xe4650000, 0xffff0000));
+	//channels.push_back(CanChannel(0x108c2200, -1, 0xe4650000, 0xffff0000));
+	channels.push_back(CanChannel(0x10882200, -1, 0x0, 0x0));
+	channels.push_back(CanChannel(0x108c2200, -1, 0x0, 0x0));
 	channels.push_back(CanChannel(0, 0));
 	can->begin();
 }
@@ -695,7 +735,7 @@ void loop() {
 		int n = Serial2.read(buf, sizeof(buf));
 		//Serial.printf("Serial read %d bytes\n", n);
 		lb.add(buf, n, [](const char *line) {
-			sendUdpCan("NMEA=%s", line);
+			sendData("NMEA=%s", line);
 			Serial.printf("NMEA: %s\n", line);
 		});
 
@@ -708,12 +748,11 @@ void loop() {
 		can->reset();
 	}
 	
-	string s = autopilot.read();
+	string s = espnow.read();
 	if (s.length()) { 
 		processCommand(s.c_str(), s.length());
 	}
 
-	//trimPosAvg.add(analogRead(33));
 	if (canReportTimer.tick()/* || isrData.forceSend*/) { 
 		isrData.forceSend = false;
 		//Serial.printf("%08d %d\n", (int)millis(), isrData.mode);
@@ -721,42 +760,46 @@ void loop() {
 	}
 
 	if (serialReportTimer.tick()) {
-		//sendDebugData();
+		//digitalWrite(pins.led, !digitalRead(pins.led));
 		char buf[256]; 
 		snprintf(buf, sizeof(buf), "L: %08.3f %05.3f/%05.3f/%05.3f m:%d appkt: %d can:%d drop:%d qlen:%d serIn:%d canRx:%d canAvail:%d\n", millis() / 1000.0, 
 		loopTimeAvg.average()/1000.0, loopTimeAvg.min()/1000.0, loopTimeAvg.max()/1000.0, 
-			isrData.mode, autopilotPackets, can->isrCount, can->dropped, can->getQueueLen(), serialBytesIn,
+			isrData.mode, espnowPackets, can->isrCount, can->dropped, can->getQueueLen(), serialBytesIn,
 			0, 0);
 		Serial.print(buf);
 		fd.print(buf);
-		//CAN.dumpRegisters(Serial);
-		//CAN.beginPacket(0x12);
-		//CAN.write('h');
-		//CAN.write('i');
-		//Serial.println("Calling CAN.endPacket()");
-		//CAN.endPacket();
 
-	}
-	
-	if (Serial.available()) {
-		static LineBuffer line;
-		int l = Serial.readBytes(buf, sizeof(buf));
-		for (int i = 0; i < l; i++) {
-			int ll = line.add(buf[i]);
-			if (ll) {
-				udp.beginPacket("255.255.255.255", 7891);
-				udp.write((uint8_t *)line.line, ll);
-				udp.endPacket();
-			}
+
+		twai_message_t p;
+		static bool alternate = 0;
+		alternate = !alternate;
+
+
+		p.flags = 0x1; 
+		//p.identifier = 0x108a2222; // net err conflict
+		//p.identifier = 0x108e2222; // no conflict 
+		//p.identifier = 0x108c2200; // no conflict
+		//p.identifier = 0x10882200; // network err conflict 
+		p.identifier = 0x108c2222;
+		p.data_length_code = 7;
+		p.data[0] = 0xe4;
+		p.data[1] = 0x65;
+		p.data[2] = 0x00;
+		if (alternate) { 
+			p.data[3] = 0x28;
+			p.data[4] = 0x17;
+			p.data[5] = 0xc6;
+			p.data[6] = 0x47;
+		} else { 
+			p.data[3] = 0x17;
+			p.data[4] = 0x28;
+			p.data[5] = 0xc6;
+			p.data[6] = 0x47;
 		}
-	}	
-	
-	int avail;
-	if (0 && (avail = udp.parsePacket()) > 0) {
-		int r = udp.read(buf, min(avail, (int)sizeof(buf)));
-		processCommand((char *)buf, r);
+		int r = twai_transmit(&p, pdMS_TO_TICKS(100));
+		printf("twai_transmit returned %d\n", r);
 	}
-
+	
 	static int startupPeriod = 20000;
 	if (millis() > startupPeriod)
 		startupPeriod = 0;
@@ -830,7 +873,7 @@ void loop() {
 // the rest of the file is simulation support code 
 
 
-class ESP32sim_autotrim : ESP32sim_Module { 
+class ESP32sim_autotrim : Csim_Module { 
 #ifdef DISCARD
 	ifstream gdl90file; 
 	ifstream trackSimFile;
