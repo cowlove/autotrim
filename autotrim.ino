@@ -150,6 +150,7 @@ int lastCmdTime = 0, lastCmdMs = 0, lastCmdPin = 0;
 float startTrimPos = 0;
 
 //RollingAverage<long int,1000> loopTimeAvg;
+
 struct DummyLoopTime { 
 	float average() { return -1; }
 	float min() { return -1; }
@@ -157,21 +158,21 @@ struct DummyLoopTime {
 	void add(float) {}
 } loopTimeAvg;
 uint64_t lastLoopTime = -1;
-EggTimer serialReportTimer(2000), displayTimer(1000);
+EggTimer serialReportTimer(500), displayTimer(1000);
 EggTimer canReportTimer(1000), canResetTimer(5000), sl30Heartbeat(1000), sdCardFlush(2000);
 
 uint64_t nextCmdTime = 0;
 static bool debugMoveNeedles = false;
 
 static bool first = true;
-ReliableStreamESPNow espnow("G5");
+ReliableStreamESPNow espnow("G5", true/*alwaysBroadcast*/);
 static int espnowPackets = 0;
 
 // send udp packet multiple times on broadcast address and all addresses in normal EchoUAT wifi range 
 void superSend(const char *b) { 
 	espnow.write(string(b));
 	espnowPackets++;
-	Serial.print(b);
+	//Serial.print(b);
 }
 
 struct IsrData {
@@ -186,7 +187,7 @@ struct IsrData {
 } isrData, lastSent;
 
 float knobValues[10];
-int canSerial = 1;
+int canSerial = 0;
 void canToText(const uint8_t *ibuf, int lastId, int mpSize, uint32_t ts, char *obuf, int obufsz);
 
 class CanWrapper {
@@ -234,13 +235,16 @@ public:
 		char obuf[128];
 		twai_message_t cp;
 		while(maxPkts != 0 && twai_receive(&cp, pdMS_TO_TICKS(100)) == ESP_OK) {
-			Serial.printf("CAN %08" PRIx32 " %08" PRIx32 " %08" PRIx32 " %1d",
-				micros(), cp.flags, cp.identifier, cp.data_length_code);
-			if (cp.rtr == 0) {
-				for (int n = 0; n < cp.data_length_code; n++) 
-				Serial.printf(" %02x", cp.data[n]);
+			isrCount++;
+			if (0) { 
+				printf("CAN %08" PRIx32 " %08" PRIx32 " %08" PRIx32 " %1d",
+					micros(), cp.flags, cp.identifier, cp.data_length_code);
+				if (cp.rtr == 0) {
+					for (int n = 0; n < cp.data_length_code; n++) 
+					printf(" %02x", cp.data[n]);
+				}
+				printf("\n");
 			}
-			Serial.print("\n");
 			uint32_t timestamp = millis();
 			if (maxPkts > 0) 
 				maxPkts--;
@@ -356,7 +360,7 @@ void sendCanData() {
 	int age = millis() - isrData.timestamp;
 	snprintf(sbuf, sizeof(sbuf),
 		"P=%.2f R=%.2f HDG=%.2f TRK=%.2f IAS=%.1f TAS=%.1f PALT=%.1f MODE=%d "
-		"K=%.2f %.2f %.2f %.2f %.2f %.2f\n",
+		"K=%.4f,%.4f,%.4f,%.4f,%.4f,%.4f\n",
 		isrData.pitch * 180 / M_PI, isrData.roll * 180 / M_PI, 
 		isrData.magHdg * 180 / M_PI, isrData.magTrack * 180 / M_PI, 
 		isrData.ias / MPS_PER_KNOT, isrData.tas / MPS_PER_KNOT, 
@@ -422,10 +426,15 @@ void canToText(const uint8_t *ibuf, int lastId, int mpSize, uint32_t ts, char *o
 	obuf[outlen] = 0;				
 }
 int serialBytesIn = 0;
+
+uint32_t lastSendMs = 0; // rate gate only Pitch/Roll sends  
+static const int sendMinMs = 50;
+
 void canParse(int id, int len, uint32_t timestamp, const uint8_t *ibuf) { 
 	int lastId = id;
 	int mpSize = len;
 	static char obuf[1024];
+	uint32_t nowMs = millis();
 	if (canSerial) {
 		canToText(ibuf, id, len, timestamp, obuf, sizeof(obuf));
 		Serial.printf("P "); 
@@ -499,9 +508,10 @@ void canParse(int id, int len, uint32_t timestamp, const uint8_t *ibuf) {
 			float pitch = floatFromBinary(&ibuf[20]);
 			float roll = floatFromBinary(&ibuf[24]);
 			isrData.timestamp = millis();
-			if (abs(pitch - lastSent.pitch) > thresh || 
-				abs(roll - lastSent.roll) > thresh) {
-				sendData("XP=%.2f R=%.2f\n", (float)(pitch * 180/M_PI), (float)(roll * 180/M_PI));
+			if ((nowMs - lastSendMs) >= sendMinMs && (abs(pitch - lastSent.pitch) > thresh || 
+				abs(roll - lastSent.roll) > thresh)) {
+				sendData("P=%.2f R=%.2f\n", (float)(pitch * 180/M_PI), (float)(roll * 180/M_PI));
+				lastSendMs = nowMs;
 				lastSent.pitch = pitch; 
 				lastSent.roll = roll;
 			}
@@ -592,7 +602,7 @@ void canParse(int id, int len, uint32_t timestamp, const uint8_t *ibuf) {
 
 	static float lastKnobVal = 0;
 	static uint64_t lastKnobMillis = 0;
-	if ((isrData.knobSel == 1/*hdg*/)  && isrData.knobVal != lastKnobVal) { 
+	if ((isrData.knobSel == 1/*hdg*/ || isrData.knobSel == 5)  && isrData.knobVal != lastKnobVal) { 
 		if (millis() - lastKnobMillis > 500) 
 			isrData.mode = 0;
 		lastKnobMillis = millis();
@@ -736,7 +746,7 @@ void loop() {
 		//Serial.printf("Serial read %d bytes\n", n);
 		lb.add(buf, n, [](const char *line) {
 			sendData("NMEA=%s", line);
-			Serial.printf("NMEA: %s\n", line);
+			//Serial.printf("NMEA: %s\n", line);
 		});
 
 	}
@@ -762,18 +772,21 @@ void loop() {
 	if (serialReportTimer.tick()) {
 		//digitalWrite(pins.led, !digitalRead(pins.led));
 		char buf[256]; 
-		snprintf(buf, sizeof(buf), "L: %08.3f %05.3f/%05.3f/%05.3f m:%d appkt: %d can:%d drop:%d qlen:%d serIn:%d canRx:%d canAvail:%d\n", millis() / 1000.0, 
+		snprintf(buf, sizeof(buf), "L: %08.3f %05.3f/%05.3f/%05.3f "
+		"m:%d appkt: %d can:%d drop:%d qlen:%d serIn:%d "
+		"%d\n", 
+		millis() / 1000.0, 
 		loopTimeAvg.average()/1000.0, loopTimeAvg.min()/1000.0, loopTimeAvg.max()/1000.0, 
-			isrData.mode, espnowPackets, can->isrCount, can->dropped, can->getQueueLen(), serialBytesIn,
-			0, 0);
+		isrData.mode, espnowPackets, can->isrCount, can->dropped, can->getQueueLen(), serialBytesIn,
+		0);
 		Serial.print(buf);
 		fd.print(buf);
 
 
+#if 0 
 		twai_message_t p;
 		static bool alternate = 0;
 		alternate = !alternate;
-
 
 		p.flags = 0x1; 
 		//p.identifier = 0x108a2222; // net err conflict
@@ -798,14 +811,15 @@ void loop() {
 		}
 		int r = twai_transmit(&p, pdMS_TO_TICKS(100));
 		printf("twai_transmit returned %d\n", r);
+#endif
 	}
-	
+
 	static int startupPeriod = 20000;
 	if (millis() > startupPeriod)
 		startupPeriod = 0;
 	
 	if (sl30Heartbeat.tick()) {
-#if 0 
+#if 0
 		if (0) { 
 			//ScopedMutex lock(canMutex);  // panics ISR when ISR blocks too long 
 			CAN.beginExtendedPacket(0x10882200);
@@ -864,7 +878,8 @@ void loop() {
 		canSerial = udpCanOut = 0;
 
 	//canSerial = udpCanOut = (isrData.mode == 7);
-	delayMicroseconds(1);
+	delay(1);
+	yield();
 }
 
 
