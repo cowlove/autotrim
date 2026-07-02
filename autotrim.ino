@@ -137,7 +137,6 @@ void ulp_go() {
 
 SL30 sl30;
 
-File fd;
 bool otaInProgress = false;
 int udpCanOut = 0; // debug output, send all CAN data out over udp port
 static int cmdCount = 0;
@@ -159,7 +158,7 @@ struct DummyLoopTime {
 } loopTimeAvg;
 uint64_t lastLoopTime = -1;
 EggTimer serialReportTimer(500), displayTimer(1000);
-EggTimer canReportTimer(1000), canResetTimer(5000), sl30Heartbeat(1000), sdCardFlush(2000);
+EggTimer canReportTimer(100), canResetTimer(5000), sl30Heartbeat(1000), sdCardFlush(2000);
 
 uint64_t nextCmdTime = 0;
 static bool debugMoveNeedles = false;
@@ -234,7 +233,7 @@ public:
 	void run(int timeout, int maxPkts = -1) { 
 		char obuf[128];
 		twai_message_t cp;
-		while(maxPkts != 0 && twai_receive(&cp, pdMS_TO_TICKS(100)) == ESP_OK) {
+		while(maxPkts != 0 && twai_receive(&cp, timeout) == ESP_OK) {
 			isrCount++;
 			if (0) { 
 				printf("CAN %08" PRIx32 " %08" PRIx32 " %08" PRIx32 " %1d",
@@ -372,7 +371,6 @@ void sendCanData() {
 	//	isrData.palt, isrData.knobSel, isrData.knobVal, age, isrData.mode);
 	superSend(sbuf);
 	lastSent = isrData;
-	fd.write(sbuf, strlen(sbuf));
 	//Serial.printf("%d\t%d\t%s", isrData.udpSent, isrData.count, sbuf);
 }
 
@@ -389,26 +387,6 @@ float floatFromBinary(const uint8_t *b) {
 		rv = 0;
 	}
 	return rv;
-}
-
-void openLogFile(const char *filename) {
-#ifndef UBUNTU
-	open_TTGOTS_SD(); 
-	int fileVer = 1;
-	char fname[20];
-	if (strchr(filename, '%')) { // if filename contains '%', scan for existing files  
-		for(fileVer = 1; fileVer < 999; fileVer++) {
-			snprintf(fname, sizeof(fname), filename, fileVer);
-			if (!(fd = SD.open(fname, (F_READ)))) {
-				fd.close();
-				fd = SD.open(fname, (F_READ | F_WRITE | F_CREAT));
-				Serial.printf("Opened %s\n", fname);
-				return;
-			}
-		} 
-	}
-#endif
-
 }
 
 void canToText(const uint8_t *ibuf, int lastId, int mpSize, uint32_t ts, char *obuf, int obufsz) { 
@@ -476,10 +454,6 @@ void canParse(int id, int len, uint32_t timestamp, const uint8_t *ibuf) {
 		float thresh = 0.01;
 		try {
 			float magHdg = floatFromBinary(&ibuf[16]);
-			if (abs(magHdg - lastSent.magHdg) > thresh) { 
-				sendData("HDG=%.2f\n", magHdg * 180/M_PI);
-				lastSent.magHdg = magHdg;
-			}
 			isrData.magHdg = magHdg;
 		} catch(...) {
 			isrData.magHdg = 0;
@@ -491,10 +465,6 @@ void canParse(int id, int len, uint32_t timestamp, const uint8_t *ibuf) {
 		float thresh = 0.01;
 		try {
 			float magTrack = floatFromBinary(&ibuf[16]);
-			if (abs(magTrack - lastSent.magTrack) > thresh) {   
-				sendData("TRK=%.2f\n", magTrack * 180/M_PI);
-				lastSent.magTrack = magTrack;
-			}
 			isrData.magTrack = magTrack;
 	
 		} catch(...) {
@@ -508,13 +478,6 @@ void canParse(int id, int len, uint32_t timestamp, const uint8_t *ibuf) {
 			float pitch = floatFromBinary(&ibuf[20]);
 			float roll = floatFromBinary(&ibuf[24]);
 			isrData.timestamp = millis();
-			if ((nowMs - lastSendMs) >= sendMinMs && (abs(pitch - lastSent.pitch) > thresh || 
-				abs(roll - lastSent.roll) > thresh)) {
-				sendData("P=%.2f R=%.2f\n", (float)(pitch * 180/M_PI), (float)(roll * 180/M_PI));
-				lastSendMs = nowMs;
-				lastSent.pitch = pitch; 
-				lastSent.roll = roll;
-			}
 			isrData.pitch = pitch;
 			isrData.roll = roll;
 
@@ -560,15 +523,6 @@ void canParse(int id, int len, uint32_t timestamp, const uint8_t *ibuf) {
 			float tas = floatFromBinary(&ibuf[16]);
 			float palt = floatFromBinary(&ibuf[28]);
 			isrData.timestamp = millis();
-			if (abs(ias - lastSent.ias) > thresh || 
-				abs(tas - lastSent.tas) > thresh || 
-				abs(palt - lastSent.palt) > thresh) { 
-				sendData("IAS=%.1f TAS=%.1f PALT=%.1f\n", ias / MPS_PER_KNOT, 
-				tas / MPS_PER_KNOT, palt);
-				lastSent.ias = ias;
-				lastSent.tas = tas;
-				lastSent.palt = palt;
-			}
 			isrData.ias = ias; 
 			isrData.palt = palt;
 			isrData.tas = tas;
@@ -587,8 +541,6 @@ void canParse(int id, int len, uint32_t timestamp, const uint8_t *ibuf) {
 			isrData.knobSel = knobSel;
 			if (knobSel >= 0 && knobSel < sizeof(knobValues)/sizeof(knobValues[0]))
 				knobValues[knobSel] = knobVal;
-			Serial.printf("KNOB%d=%f\n", knobSel, knobVal);
-			sendData("KNOB%d=%f\n", knobSel, knobVal);
 			if (knobSel > 0 && knobSel < sizeof(g5KnobValues)/sizeof(g5KnobValues[0]))
 				g5KnobValues[knobSel] = knobVal;
 		} catch(...) {
@@ -614,20 +566,11 @@ void canParse(int id, int len, uint32_t timestamp, const uint8_t *ibuf) {
 		}
 		if (oneDegree && ((delta > 0 && evenMode) || (delta < 0 && !evenMode))) {
 			isrData.mode++;
-			sendData("MODE=%d\n", isrData.mode);
 		} else if (isrData.mode != 0) { 
 			isrData.mode = 0;
-			sendData("MODE=%d\n", isrData.mode);
 		}
 		lastKnobVal = isrData.knobVal;
 	}	
-
-	if (fd == true) { 
-		canToText(ibuf, id, len, timestamp, obuf, sizeof(obuf));
-		fd.write(obuf, strlen(obuf));
-		if (sdCardFlush.tick()) 
-			fd.flush();
-	}
 }
 
 bool wifiTryConnectNO(const char *ap, const char *pw, int seconds = 15) { 
@@ -729,7 +672,7 @@ void loop() {
 		can->reset();
 		return;
 	}
-	can->run(pdMS_TO_TICKS(5), 5);
+	can->run(pdMS_TO_TICKS(5), 100);
 
 	
 	while (Serial.available()) { 
@@ -780,8 +723,6 @@ void loop() {
 		isrData.mode, espnowPackets, can->isrCount, can->dropped, can->getQueueLen(), serialBytesIn,
 		0);
 		Serial.print(buf);
-		fd.print(buf);
-
 
 #if 0 
 		twai_message_t p;
