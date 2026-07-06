@@ -17,6 +17,7 @@
 #include "TinyGPS++.h"
 #include "jimlib.h"
 #include "dataTools.h"
+// The historical ILS simulator lives in the winglevlr nav helpers.
 #include "../winglevlr/GDL90Parser.h"
 #include "../winglevlr/WaypointNav.h"
 #include "espNowMux.h"
@@ -31,6 +32,7 @@ using namespace WaypointNav;
 
 //WiFiMulti wifi;
 //WiFiUDP udpG90;
+// Keep this old state shape so the revived ILS code can share its original inputs.
 GDL90Parser::State currentState;
 TinyGPSPlus nmeaGps;
 
@@ -610,6 +612,7 @@ void updateFixFromNmea() {
 	currentState.valid = true;
 }
 
+// Serial and ESP-NOW command paths can both provide NMEA, so parse by line here.
 void parseNmea(const char *buf, int n) {
 	for (int i = 0; i < n; i++) {
 		nmeaGps.encode(buf[i]);
@@ -864,6 +867,7 @@ void loop() {
 			if (ils == NULL) {
 				float vlocTrk = g5KnobValues[4] * 180/M_PI;
 				float altBug = g5KnobValues[2];
+				// A selected VLOC course creates a synthetic approach; otherwise use the nearest known approach.
 				if (vlocTrk != 0) {
 					const float gs = 3.0;
 					float tdze = altBug - 200 / 3.281;
