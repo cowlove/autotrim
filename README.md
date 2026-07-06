@@ -54,3 +54,16 @@ When a GPS fix is available, the sketch either creates a fake approach from the
 selected VLOC course and altitude bug or chooses the best known nearby approach.
 It then computes CDI and glideslope deflections and sends them through
 `sl30.setCDI(hd, vd)`.
+
+The two ILS entry paths are selected by the VLOC/OBS course at the moment mode 5
+creates the simulator:
+
+- VLOC/OBS course zero: choose the nearest compatible runway from the built-in
+  approach database.
+- VLOC/OBS course nonzero: synthesize a fictional ILS in front of the current
+  GPS position. The selected course becomes the final approach course, the
+  altitude bug shapes the touchdown-zone elevation, and the intercept point is
+  placed 3 km ahead of the current track.
+
+To switch between these paths, leave mode 5 and re-enter it after changing the
+VLOC/OBS course.

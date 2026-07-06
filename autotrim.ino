@@ -868,10 +868,15 @@ void loop() {
 			if (ils == NULL) {
 				float vlocTrk = g5KnobValues[4] * 180/M_PI;
 				float altBug = g5KnobValues[2];
-				// A selected VLOC course creates a synthetic approach; otherwise use the nearest known approach.
+				// Historical mode-5 behavior has two ILS entry paths:
+				// - VLOC/OBS course set: synthesize a fictional ILS ahead of the current GPS track.
+				// - VLOC/OBS course zero: choose the nearest compatible approach from the built-in list.
+				// The choice happens only when ils is created; leave and re-enter mode 5 to switch paths.
 				if (vlocTrk != 0) {
 					const float gs = 3.0;
 					float tdze = altBug - 200 / 3.281;
+					// Put the final approach intercept 3 km ahead, then project to the touchdown point
+					// using the selected course and a 3 degree glideslope from the current altitude.
 					LatLon facIntercept = locationBearingDistance(now, currentState.track, 3000);
 					float facDist = (currentState.alt - tdze) / tan(gs * M_PI/180);
 					LatLon tdz = locationBearingDistance(facIntercept, magToTrue(vlocTrk), facDist);
