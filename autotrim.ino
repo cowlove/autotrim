@@ -193,6 +193,24 @@ struct IsrData {
 	int udpErrs;
 } isrData, lastSent;
 
+void resetIlsSimulator() {
+	if (ils != NULL) {
+		delete ils;
+		ils = NULL;
+	}
+}
+
+void setMode(int newMode) {
+	if (isrData.mode == newMode)
+		return;
+
+	bool touchesIlsMode = isrData.mode == 5 || newMode == 5;
+	isrData.mode = newMode;
+	// Entering mode 5 starts fresh; leaving mode 5 tears down the active simulation.
+	if (touchesIlsMode)
+		resetIlsSimulator();
+}
+
 float knobValues[10];
 int canSerial = 0;
 void canToText(const uint8_t *ibuf, int lastId, int mpSize, uint32_t ts, char *obuf, int obufsz);
@@ -564,7 +582,7 @@ void canParse(int id, int len, uint32_t timestamp, const uint8_t *ibuf) {
 	static uint64_t lastKnobMillis = 0;
 	if ((isrData.knobSel == 1/*hdg*/ || isrData.knobSel == 5)  && isrData.knobVal != lastKnobVal) { 
 		if (millis() - lastKnobMillis > 500) 
-			isrData.mode = 0;
+			setMode(0);
 		lastKnobMillis = millis();
 		double delta = isrData.knobVal - lastKnobVal;
 		bool oneDegree = abs(delta) < 1.5/180*M_PI && abs(delta) > 0.5/180*M_PI;
@@ -573,9 +591,9 @@ void canParse(int id, int len, uint32_t timestamp, const uint8_t *ibuf) {
 			oneDegree = abs(delta) < 35 && abs(delta) > 30;
 		}
 		if (oneDegree && ((delta > 0 && evenMode) || (delta < 0 && !evenMode))) {
-			isrData.mode++;
+			setMode(isrData.mode + 1);
 		} else if (isrData.mode != 0) { 
-			isrData.mode = 0;
+			setMode(0);
 		}
 		lastKnobVal = isrData.knobVal;
 	}	
@@ -901,8 +919,7 @@ void loop() {
 		} else if (isrData.mode == 5 && !currentState.valid && ilsWaitReportTimer.tick()) {
 			Serial.println("ILS mode waiting for GPS fix");
 		} else if (ils != NULL) {
-			delete ils;
-			ils = NULL;
+			resetIlsSimulator();
 		}
 	}
 	delay(1);
@@ -939,7 +956,7 @@ class ESP32sim_autotrim : Csim_Module {
 
 	void updateInputs() {
 		if (tSim.inputs.find("MODE") != tSim.inputs.end())
-			isrData.mode = tSim.inputs["MODE"];
+			setMode(tSim.inputs["MODE"]);
 		if (tSim.inputs.find("HDGBUG") != tSim.inputs.end())
 			g5KnobValues[1] = DEG2RAD(tSim.inputs["HDGBUG"]);
 		if (tSim.inputs.find("ALTBUG") != tSim.inputs.end())
