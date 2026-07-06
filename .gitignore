@@ -1,6 +1,9 @@
 *.jpg
 *.png
 a.out
+autotrim_csim
+build/
+tun-rp1
 *.txt
 *.can
 jimlib.h
