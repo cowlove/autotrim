@@ -9,6 +9,7 @@
 #include <vector>
 #include <iterator>
 #include <istream>
+#include <fstream>
 
 #ifdef CSIM
 #undef ARDUINO
@@ -910,28 +911,87 @@ void loop() {
 
 
 class ESP32sim_autotrim : Csim_Module { 
-#ifdef DISCARD
-	ifstream gdl90file; 
-	ifstream trackSimFile;
+	std::ifstream trackSimFile;
 	WaypointNav::WaypointSequencer tSim = WaypointNav::WaypointSequencer(trackSimFile);
-#endif
 	int last_us = 0;	
 	bool makeKml = false;
 	IntervalTimer hz100 = IntervalTimer(100/*msec*/);
 	int loopcount = 0;
+	bool trackSimActive = false;
+	int lastTrackSimReportMs = -1000;
 
 	void parseArg(char **&a, char **la) override {
 		printf("at parse arg\n");
 		if (strcmp(*a, "--kml") == 0) makeKml = true;
 		if (strcmp(*a, "--canfile") == 0) CAN.setSimFile(*(++a)); 
 		if (strcmp(*a, "--canserial") == 0) canSerial = 1;
+		if (strcmp(*a, "--tracksim") == 0) {
+			trackSimFile = std::ifstream(*(++a), std::ios_base::in | std::ios_base::binary);
+			trackSimActive = true;
+		}
 	}
 	void setup() override {}
+
+	void updateInputs() {
+		if (tSim.inputs.find("MODE") != tSim.inputs.end())
+			isrData.mode = tSim.inputs["MODE"];
+		if (tSim.inputs.find("HDGBUG") != tSim.inputs.end())
+			g5KnobValues[1] = DEG2RAD(tSim.inputs["HDGBUG"]);
+		if (tSim.inputs.find("ALTBUG") != tSim.inputs.end())
+			g5KnobValues[2] = tSim.inputs["ALTBUG"];
+		if (tSim.inputs.find("VLOCBUG") != tSim.inputs.end())
+			g5KnobValues[4] = DEG2RAD(tSim.inputs["VLOCBUG"]);
+	}
+
+	void publishTrackSimState() {
+		LatLonAlt p = tSim.wptTracker.curPos;
+		if (!p.valid)
+			return;
+
+		currentState.lat = p.loc.lat;
+		currentState.lon = p.loc.lon;
+		currentState.alt = p.alt;
+		currentState.track = tSim.wptTracker.commandTrack;
+		currentState.vvel = tSim.wptTracker.vvel;
+		currentState.hvel = tSim.wptTracker.speed;
+		currentState.palt = ((p.alt * FEET_PER_METER) + 1000) / 25;
+		currentState.timestamp = millis();
+		currentState.updated = true;
+		currentState.valid = true;
+
+		isrData.magTrack = DEG2RAD(trueToMag(currentState.track));
+		isrData.palt = currentState.alt;
+		isrData.timestamp = millis();
+	}
+
+	void runTrackSim(float sec) {
+		tSim.run(sec);
+		if (tSim.autoPilotOn)
+			tSim.wptTracker.setCDI(hd, vd, tSim.decisionHeight);
+		if (tSim.wptTracker.curPos.valid && !tSim.wptTracker.waypointPassed)
+			tSim.wptTracker.sim(sec);
+
+		updateInputs();
+		publishTrackSimState();
+
+		if (millis() - lastTrackSimReportMs >= 1000) {
+			lastTrackSimReportMs = millis();
+			LatLonAlt p = tSim.wptTracker.curPos;
+			float range = p.valid && tSim.wptTracker.activeWaypoint.valid
+				? distance(p.loc, tSim.wptTracker.activeWaypoint.loc)
+				: -1;
+			printf("TSIM t %.1f mode %d hd %.3f vd %.3f lat %.7f lon %.7f alt %.1f trk %.1f range %.1f xte %.1f\n",
+				millis() / 1000.0, isrData.mode, hd, vd, currentState.lat, currentState.lon,
+				(float)currentState.alt, currentState.track, range, tSim.wptTracker.xte);
+		}
+	}
 			
 	void loop() override {
 		CAN.run();
 		if (!hz100.tick(millis())) 
 			return;
+		if (trackSimActive)
+			runTrackSim(hz100.interval / 1000.0);
 	}  
 		
 	void done() override{
