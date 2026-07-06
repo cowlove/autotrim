@@ -57,10 +57,9 @@ It then computes CDI and glideslope deflections and sends them through
 
 Lateral CDI and vertical glideslope use different reference points. Glideslope
 uses the touchdown-zone point and TDZE. Lateral CDI projects a localizer antenna
-reference point from the touchdown zone along the final approach course, using
-runway length plus an assumed 1,000 ft beyond the departure end. If an approach
-does not yet have runway-length data, the simulator falls back to a 5,000 ft
-runway assumption.
+reference point from the touchdown zone along the final approach course. Until
+the approach database carries runway-specific lengths, the simulator assumes a
+6,000 ft runway plus 1,000 ft beyond the departure end.
 
 The two ILS entry paths are selected by the VLOC/OBS course at the moment mode 5
 creates the simulator:
@@ -70,8 +69,8 @@ creates the simulator:
 - VLOC/OBS course nonzero: synthesize a fictional ILS in front of the current
   GPS position. The selected course becomes the final approach course, the
   altitude bug shapes the touchdown-zone elevation, and the intercept point is
-  placed 3 km ahead of the current track. Synthetic approaches use the default
-  5,000 ft runway length for localizer projection until better data is available.
+  placed 3 km ahead of the current track. Synthetic approaches use the same
+  6,000 ft runway-length assumption for localizer projection.
 
 To switch between these paths, leave mode 5 and re-enter it after changing the
 VLOC/OBS course.

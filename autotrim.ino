@@ -892,7 +892,6 @@ void loop() {
 				// The choice happens only when ils is created; leave and re-enter mode 5 to switch paths.
 				if (vlocTrk != 0) {
 					const float gs = 3.0;
-					const float syntheticRunwayLengthFt = DEFAULT_RUNWAY_LENGTH_FT;
 					float tdze = altBug - 200 / 3.281;
 					// Put the final approach intercept 3 km ahead, then project to the touchdown point
 					// using the selected course and a 3 degree glideslope from the current altitude.
@@ -900,12 +899,12 @@ void loop() {
 					float facDist = (currentState.alt - tdze) / tan(gs * M_PI/180);
 					LatLon tdz = locationBearingDistance(facIntercept, magToTrue(vlocTrk), facDist);
 					// The simulator uses TDZ for glide slope, and a projected localizer antenna
-					// runwayLength + 1000 ft past TDZ for lateral CDI sensitivity.
-					ils = new IlsSimulator(tdz, tdze, magToTrue(vlocTrk), gs, syntheticRunwayLengthFt);
+					// DEFAULT_RUNWAY_LENGTH_FT + 1000 ft past TDZ for lateral CDI sensitivity.
+					ils = new IlsSimulator(tdz, tdze, magToTrue(vlocTrk), gs);
 				} else {
 					Approach *a = findBestApproach(now);
 					if (a != NULL)
-						ils = new IlsSimulator(LatLon(a->lat, a->lon), a->tdze / 3.281, magToTrue(a->fac), a->gs, a->runwayLengthFt);
+						ils = new IlsSimulator(LatLon(a->lat, a->lon), a->tdze / 3.281, magToTrue(a->fac), a->gs);
 				}
 				if (ils != NULL) {
 					Serial.print("Started ILS, ");
