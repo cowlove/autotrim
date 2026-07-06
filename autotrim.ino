@@ -10,24 +10,29 @@
 #include <iterator>
 #include <istream>
 
-//#include "jimlib.h"
-//#include "GDL90Parser.h"
-//#include "WaypointNav.h"
+#ifdef CSIM
+#undef ARDUINO
+#define ARDUINO 10819
+#endif
+#include "TinyGPS++.h"
+#include "jimlib.h"
+#include "dataTools.h"
+#include "../winglevlr/GDL90Parser.h"
+#include "../winglevlr/WaypointNav.h"
 #include "espNowMux.h"
 #include "reliableStream.h"
 #include "synchTools.h"
 #include "sl30.h"
 #include "buttonTools.h"
 #include "TTGO_TS.h"
-#include "dataTools.h"
 
-//using namespace WaypointNav;
+using namespace WaypointNav;
 //#define LED_PIN 2
 
 //WiFiMulti wifi;
 //WiFiUDP udpG90;
-//GDL90Parser gdl90;
-//GDL90Parser::State state;
+GDL90Parser::State currentState;
+TinyGPSPlus nmeaGps;
 
 static float g5KnobValues[6];
 static double hd = -2, vd = -2; // cdi deflections 
@@ -132,8 +137,8 @@ void ulp_go() {
 // OBS knob toggle mode settings
 // 0-3: HDG mode
 // 4: NAV mode
-// 5: CDI needle test movement
-// 6: CAN data udp dump (port 7894) 
+// 5: ILS simulation
+// 6: CDI needle test movement
 
 SL30 sl30;
 
@@ -158,7 +163,7 @@ struct DummyLoopTime {
 } loopTimeAvg;
 uint64_t lastLoopTime = -1;
 EggTimer serialReportTimer(500), displayTimer(1000);
-EggTimer canReportTimer(100), canResetTimer(5000), sl30Heartbeat(1000), sdCardFlush(2000);
+EggTimer canReportTimer(100), canResetTimer(5000), sl30Heartbeat(1000), sdCardFlush(2000), ilsWaitReportTimer(2000);
 
 uint64_t nextCmdTime = 0;
 static bool debugMoveNeedles = false;
@@ -582,6 +587,41 @@ bool wifiTryConnectNO(const char *ap, const char *pw, int seconds = 15) {
 	}
 	return WiFi.status() == WL_CONNECTED;
 }
+
+void updateFixFromNmea() {
+	if (!nmeaGps.location.isValid())
+		return;
+	currentState.lat = nmeaGps.location.lat();
+	currentState.lon = nmeaGps.location.lng();
+	if (nmeaGps.course.isValid())
+		currentState.track = nmeaGps.course.deg();
+	else if (isrData.magTrack != 0)
+		currentState.track = magToTrue(isrData.magTrack * 180/M_PI);
+	if (nmeaGps.altitude.isValid()) {
+		currentState.alt = nmeaGps.altitude.meters();
+		currentState.palt = ((currentState.alt * FEET_PER_METER) + 1000) / 25;
+	} else if (isrData.palt > 0) {
+		currentState.alt = isrData.palt;
+		currentState.palt = ((currentState.alt * FEET_PER_METER) + 1000) / 25;
+	}
+	if (nmeaGps.speed.isValid())
+		currentState.hvel = nmeaGps.speed.knots();
+	currentState.updated = true;
+	currentState.valid = true;
+}
+
+void parseNmea(const char *buf, int n) {
+	for (int i = 0; i < n; i++) {
+		nmeaGps.encode(buf[i]);
+		if (buf[i] == '\r' || buf[i] == '\n')
+			updateFixFromNmea();
+	}
+}
+
+void parseNmeaLine(const char *line) {
+	parseNmea(line, strlen(line));
+	parseNmea("\n", 1);
+}
 	
 void processCommand(const char *buf, int r) {
 //static PinPulse pp[] = { PinPulse(pins.relay1), PinPulse(pins.relay2) };
@@ -606,6 +646,12 @@ void processCommand(const char *buf, int r) {
 				}
 				if (sscanf(line.line, "canserial %f", &f) == 1 ) {
 					canSerial = f;
+				}
+				if (strstr(line.line, "NMEA=") == line.line) {
+					parseNmeaLine(line.line + 5);
+				}
+				if (line.line[0] == '$' || line.line[0] == '!') {
+					parseNmeaLine(line.line);
 				}
 				if (strstr(line.line, "PMRRV")  != NULL) { 
 					Serial2.write((uint8_t *)line.line, strlen(line.line));
@@ -688,6 +734,7 @@ void loop() {
 		int n = Serial2.read(buf, sizeof(buf));
 		//Serial.printf("Serial read %d bytes\n", n);
 		lb.add(buf, n, [](const char *line) {
+			parseNmeaLine(line);
 			sendData("NMEA=%s", line);
 			//Serial.printf("NMEA: %s\n", line);
 		});
@@ -812,13 +859,42 @@ void loop() {
 			Serial2.print(s.c_str());
 			//Serial.print(s.c_str());
 		}
+		if (isrData.mode == 5 && currentState.valid) {
+			LatLon now(currentState.lat, currentState.lon);
+			if (ils == NULL) {
+				float vlocTrk = g5KnobValues[4] * 180/M_PI;
+				float altBug = g5KnobValues[2];
+				if (vlocTrk != 0) {
+					const float gs = 3.0;
+					float tdze = altBug - 200 / 3.281;
+					LatLon facIntercept = locationBearingDistance(now, currentState.track, 3000);
+					float facDist = (currentState.alt - tdze) / tan(gs * M_PI/180);
+					LatLon tdz = locationBearingDistance(facIntercept, magToTrue(vlocTrk), facDist);
+					ils = new IlsSimulator(tdz, tdze, magToTrue(vlocTrk), gs);
+				} else {
+					Approach *a = findBestApproach(now);
+					if (a != NULL)
+						ils = new IlsSimulator(LatLon(a->lat, a->lon), a->tdze / 3.281, magToTrue(a->fac), a->gs);
+				}
+				if (ils != NULL) {
+					Serial.print("Started ILS, ");
+					Serial.println(ils->toString().c_str());
+				}
+			}
+			if (ils != NULL) {
+				ils->setCurrentLocation(now, currentState.alt);
+				hd = ils->cdiPercent() * 2.0;
+				vd = ils->gsPercent() * 2.0;
+				std::string s = sl30.setCDI(hd, vd);
+				Serial2.print(s.c_str());
+			}
+		} else if (isrData.mode == 5 && !currentState.valid && ilsWaitReportTimer.tick()) {
+			Serial.println("ILS mode waiting for GPS fix");
+		} else if (ils != NULL) {
+			delete ils;
+			ils = NULL;
+		}
 	}
-	if (isrData.mode == 7) 
-		canSerial = udpCanOut = 1;
-	if (isrData.mode == 5) 
-		canSerial = udpCanOut = 0;
-
-	//canSerial = udpCanOut = (isrData.mode == 7);
 	delay(1);
 	yield();
 }
@@ -860,6 +936,3 @@ class ESP32sim_autotrim : Csim_Module {
 	} 
 } autotrim;
 #endif
-
-
-

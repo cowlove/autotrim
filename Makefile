@@ -34,6 +34,7 @@ CSIM_BUILD_DIR=./build/csim
 CSIM_LIBS+=Arduino_CRC32 ArduinoJson Adafruit_HX711 esp32jimlib
 CSIM_LIBS+=esp32csim
 CSIM_LIBS+=ESP32-TWAI-CAN
+CSIM_LIBS+=TinyGPSPlus
 
 CSIM_SRC_DIRS=$(foreach L,$(CSIM_LIBS),${HOME}/Arduino/libraries/${L}/src)
 CSIM_SRC_DIRS+=$(foreach L,$(CSIM_LIBS),${HOME}/Arduino/libraries/${L})
@@ -43,7 +44,7 @@ CSIM_SRC_WITHOUT_PATH = $(notdir $(CSIM_SRCS))
 CSIM_OBJS=$(CSIM_SRC_WITHOUT_PATH:%.cpp=${CSIM_BUILD_DIR}/%.o)
 CSIM_INC=$(foreach DIR,$(CSIM_SRC_DIRS),-I${DIR})
 
-CSIM_CFLAGS+=-g -ffunction-sections -Wl,--gc-sections -MMD -fpermissive -DGIT_VERSION=\"${GIT_VERSION}\" -DESP32 -DCSIM -DUBUNTU 
+CSIM_CFLAGS+=-g -ffunction-sections -Wl,--gc-sections -MMD -fpermissive -DGIT_VERSION=\"${GIT_VERSION}\" -DESP32 -DCSIM -DUBUNTU -DARDUINO=10819
 #CSIM_CFLAGS+=-DGPROF=1 -pg
 #CSIM_CFLAGS+=-O2
 
@@ -87,5 +88,3 @@ uc:
 
 backtrace:
 	tr ' ' '\n' | addr2line -f -i -e ./build/${BOARD}/*.elf
-
-
