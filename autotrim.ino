@@ -39,15 +39,6 @@ TinyGPSPlus nmeaGps;
 
 static float g5KnobValues[6];
 static double hd = -2, vd = -2; // cdi deflections 
-static constexpr double CDI_LIMIT = 1.99;
-
-static double limitCdi(double value) {
-	if (value > CDI_LIMIT)
-		return CDI_LIMIT;
-	if (value < -CDI_LIMIT)
-		return -CDI_LIMIT;
-	return value;
-}
 
 #ifdef XDISPLAY
 namespace Display {
@@ -922,8 +913,8 @@ void loop() {
 			}
 			if (ils != NULL) {
 				ils->setCurrentLocation(now, currentState.alt);
-				hd = limitCdi(ils->cdiPercent() * 2.0);
-				vd = limitCdi(ils->gsPercent() * 2.0);
+				hd = ils->cdiPercent() * 2.0;
+				vd = ils->gsPercent() * 2.0;
 				std::string s = sl30.setCDI(hd, vd);
 				Serial2.print(s.c_str());
 			}
@@ -1004,20 +995,23 @@ class ESP32sim_autotrim : Csim_Module {
 	bool flyIlsNeedles(float sec) {
 		if (!tSim.autoPilotOn || isrData.mode != 5 || ils == NULL || !tSim.wptTracker.curPos.valid)
 			return false;
+		if (abs(hd) >= 2.0)
+			return false;
 
-		float simHd = limitCdi(hd);
-		float simVd = limitCdi(vd);
 		float speedMps = tSim.wptTracker.speed * .51444f;
 
-		tSim.wptTracker.commandTrack = constrain360(ils->faCrs + simHd * 22.5f);
+		tSim.wptTracker.commandTrack = constrain360(ils->faCrs + hd * 22.5f);
 		tSim.wptTracker.prevPos = tSim.wptTracker.curPos;
 		tSim.wptTracker.curPos.loc = locationBearingDistance(
 			tSim.wptTracker.curPos.loc,
 			tSim.wptTracker.commandTrack,
 			speedMps * sec);
 
-		float nominalDescent = speedMps * tan(DEG2RAD(ils->gs));
-		float vvelMps = -nominalDescent - simVd * 1.5f;
+		float vvelMps = 0.0f;
+		if (abs(vd) < 2.0) {
+			float nominalDescent = speedMps * tan(DEG2RAD(ils->gs));
+			vvelMps = -nominalDescent - vd * 1.5f;
+		}
 		tSim.wptTracker.curPos.alt = max(0.0f, tSim.wptTracker.curPos.alt + vvelMps * sec);
 		tSim.wptTracker.vvel = vvelMps * 196.85f;
 		tSim.wptTracker.xte = crossTrackErr(ils->tdzLocation, ils->locAntennaLocation, tSim.wptTracker.curPos.loc);
