@@ -20,7 +20,22 @@ awk '
 	END {
 		print approach;
 		print line;
-		exit !(approach ~ /KBFI 14R/ && mode == 5 && hd > -0.2 && hd < 0.2 && trk > 145 && trk < 156 && xte > -10 && xte < 10)
+
+		# Confirm the starting point selected the intended built-in approach.
+		approach_ok = approach ~ /KBFI 14R/
+		mode_ok = mode == 5
+
+		# After the scripted 30 degree intercept, lateral CDI should be alive
+		# and nearly centered rather than still pegged at +/-2.0.
+		cdi_centered = hd > -0.2 && hd < 0.2
+
+		# KBFI 14R final approach course is about 150.5 degrees true.
+		on_final_course = trk > 145 && trk < 156
+
+		# Cross-track error is reported in meters from the simulated localizer.
+		localizer_captured = xte > -10 && xte < 10
+
+		exit !(approach_ok && mode_ok && cdi_centered && on_final_course && localizer_captured)
 	}
 ' out.txt
  
