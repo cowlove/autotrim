@@ -1,7 +1,5 @@
 #pragma once
 
-#ifdef CSIM
-
 template <typename T>
 class SDCardBufferedLog {
 public:
@@ -14,9 +12,3 @@ public:
   void add(const T *, int = 0) { written++; }
   void flush() {}
 };
-
-#else
-
-#include "/home/jim/Arduino/libraries/esp32jimlib/src/TTGO_TS.h"
-
-#endif

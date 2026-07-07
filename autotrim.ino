@@ -972,10 +972,14 @@ class ESP32sim_autotrim : Csim_Module {
 		if (!p.valid)
 			return;
 
+		float actualTrack = tSim.wptTracker.commandTrack;
+		if (tSim.wptTracker.prevPos.valid)
+			actualTrack = bearing(tSim.wptTracker.prevPos.loc, p.loc);
+
 		currentState.lat = p.loc.lat;
 		currentState.lon = p.loc.lon;
 		currentState.alt = p.alt;
-		currentState.track = tSim.wptTracker.commandTrack;
+		currentState.track = actualTrack;
 		currentState.vvel = tSim.wptTracker.vvel;
 		currentState.hvel = tSim.wptTracker.speed;
 		currentState.palt = ((p.alt * FEET_PER_METER) + 1000) / 25;
@@ -988,14 +992,40 @@ class ESP32sim_autotrim : Csim_Module {
 		isrData.timestamp = millis();
 	}
 
+	bool flyIlsNeedles(float sec) {
+		if (!tSim.autoPilotOn || isrData.mode != 5 || ils == NULL || !tSim.wptTracker.curPos.valid)
+			return false;
+
+		float simHd = max(-1.99f, min(1.99f, (float)hd));
+		float simVd = max(-1.99f, min(1.99f, (float)vd));
+		float speedMps = tSim.wptTracker.speed * .51444f;
+
+		tSim.wptTracker.commandTrack = constrain360(ils->faCrs + simHd * 22.5f);
+		tSim.wptTracker.prevPos = tSim.wptTracker.curPos;
+		tSim.wptTracker.curPos.loc = locationBearingDistance(
+			tSim.wptTracker.curPos.loc,
+			tSim.wptTracker.commandTrack,
+			speedMps * sec);
+
+		float nominalDescent = speedMps * tan(DEG2RAD(ils->gs));
+		float vvelMps = -nominalDescent - simVd * 1.5f;
+		tSim.wptTracker.curPos.alt = max(0.0f, tSim.wptTracker.curPos.alt + vvelMps * sec);
+		tSim.wptTracker.vvel = vvelMps * 196.85f;
+		tSim.wptTracker.xte = crossTrackErr(ils->tdzLocation, ils->locAntennaLocation, tSim.wptTracker.curPos.loc);
+		return true;
+	}
+
 	void runTrackSim(float sec) {
 		tSim.run(sec);
-		if (tSim.autoPilotOn)
-			tSim.wptTracker.setCDI(hd, vd, tSim.decisionHeight);
-		if (tSim.wptTracker.curPos.valid && !tSim.wptTracker.waypointPassed)
-			tSim.wptTracker.sim(sec);
-
 		updateInputs();
+
+		if (!flyIlsNeedles(sec)) {
+			if (tSim.autoPilotOn)
+				tSim.wptTracker.setCDI(hd, vd, tSim.decisionHeight);
+			if (tSim.wptTracker.curPos.valid && !tSim.wptTracker.waypointPassed)
+				tSim.wptTracker.sim(sec);
+		}
+
 		publishTrackSimState();
 
 		if (millis() - lastTrackSimReportMs >= 1000) {
