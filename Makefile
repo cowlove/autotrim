@@ -40,11 +40,12 @@ CSIM_SRC_DIRS=$(foreach L,$(CSIM_LIBS),${HOME}/Arduino/libraries/${L}/src)
 CSIM_SRC_DIRS+=$(foreach L,$(CSIM_LIBS),${HOME}/Arduino/libraries/${L})
 CSIM_SRC_DIRS+=$(foreach L,$(CSIM_LIBS),${HOME}/Arduino/libraries/${L}/src/csim_include)
 CSIM_SRCS=$(foreach DIR,$(CSIM_SRC_DIRS),$(wildcard $(DIR)/*.cpp)) 
+CSIM_SRCS := $(filter-out %/batchWebLogger.cpp,$(CSIM_SRCS))
 CSIM_SRC_WITHOUT_PATH = $(notdir $(CSIM_SRCS))
 CSIM_OBJS=$(CSIM_SRC_WITHOUT_PATH:%.cpp=${CSIM_BUILD_DIR}/%.o)
-CSIM_INC=$(foreach DIR,$(CSIM_SRC_DIRS),-I${DIR})
+CSIM_INC=$(foreach DIR,$(CSIM_SRC_DIRS),-I${DIR}) -I.
 
-CSIM_CFLAGS+=-g -ffunction-sections -Wl,--gc-sections -MMD -fpermissive -DGIT_VERSION=\"${GIT_VERSION}\" -DESP32 -DCSIM -DUBUNTU -DARDUINO=10819
+CSIM_CFLAGS+=-g -ffunction-sections -Wl,--gc-sections -MMD -fpermissive -DGIT_VERSION=\"${GIT_VERSION}\" -DESP32 -DCSIM -DARDUINO=10819 -DIRAM_ATTR= -DARDUINOJSON_ENABLE_PROGMEM=0 -DARDUINOJSON_ENABLE_ARDUINO_STREAM=0 -DARDUINOJSON_ENABLE_ARDUINO_STRING=0 -DARDUINOJSON_ENABLE_ARDUINO_PRINT=0
 #CSIM_CFLAGS+=-DGPROF=1 -pg
 #CSIM_CFLAGS+=-O2
 
