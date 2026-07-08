@@ -92,6 +92,24 @@ design intent, caveats, and workflows that future agents need.
 - While the NMEA fix is fresh, the 100 ms G5/SL30 loop should call `setCDI()`
   using a short dead-reckoned position from the last fix, track, and groundspeed
   rather than holding the last NMEA lat/lon until the next sentence arrives.
+- Current GPS-only smoothing mainly helps the lateral needle. The loop
+  extrapolates lat/lon from NMEA track and groundspeed at 10 Hz, so lateral CDI
+  is recomputed smoothly between slower GPS position fixes.
+- The vertical needle is only partially smoothed today. `navFix.altMeters` is
+  updated from NMEA GPS altitude and then held until the next fresh altitude
+  value arrives. Glideslope error may still change a little because the
+  horizontally coasted position changes range to the touchdown zone, but the
+  altitude-driven part of vertical error can still step when GPS altitude
+  updates.
+- A possible temporary GPS-only experiment is to keep a small altitude history,
+  such as about five seconds or five GPS fixes, and estimate a vertical trend
+  from those recent NMEA altitude samples. That trend could be used to coast
+  `navFix.altMeters` between GPS altitude updates, likely with conservative
+  outlier rejection and bounds on plausible vertical speed. Treat this as
+  throw-away smoothing work only. Long term, sensitive vertical position should
+  come from a deliberate sensor-fusion package using high-rate, high-precision
+  barometric/CAN data with proper altimeter correction and source modeling, not
+  from ad hoc GPS-altitude smoothing inside `autotrim`.
 - TinyGPSPlus `location.isValid()` is sticky after a prior good fix, so NMEA
   freshness should be judged with `location.age()` and `navFix.timestamp`,
   not `isValid()` alone.
