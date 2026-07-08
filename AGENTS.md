@@ -181,7 +181,7 @@ simulation based on current GPS/knob state.
   airport, the csim can make localizer and glideslope capture appear too
   simultaneous, which is less representative of a real approach.
 - The current `test.sh` geometry is the earlier Bainbridge-to-KBFI 14R
-  intercept translated about two nautical miles farther from the airport along
+  intercept translated about four nautical miles farther from the airport along
   the runway 14R approach corridor. Both the starting point and the scripted
   intercept waypoint were moved outbound along the reciprocal of the 14R final
   approach course, preserving the roughly 30 degree intercept angle while
