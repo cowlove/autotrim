@@ -238,6 +238,25 @@ simulation based on current GPS/knob state.
 - `test.sh` should use the current csim binary flow:
   - `make BOARD=csim`
   - `./autotrim_csim`
+- `test2.sh` exercises the synthetic/fake ILS entry path instead of the
+  built-in KBFI approach-selection path. In this path, entering mode 5 with a
+  nonzero VLOC/OBS course creates a fictional ILS in front of the simulated
+  aircraft.
+- For synthetic ILS csim tests, do not set `INPUT.MODE 5` before the simulator
+  has flown enough to establish a meaningful current track. If mode 5 is set
+  before or at the first waypoint, `navFix.track` can still be `0.0`, so the
+  fake ILS is projected in front of a northbound/unknown track instead of in
+  front of the intended intercept leg. A short setup leg before `INPUT.MODE 5`
+  gives the simulator a real track, then the next leg can intercept the
+  fictional localizer.
+- Track file altitude units are easy to mix up:
+  - waypoint altitude fields in `tracksim.txt` are parsed as feet and converted
+    to meters by `WaypointSequencer`
+  - `INPUT.ALTBUG` feeds `g5KnobValues[2]` directly and the current synthetic
+    ILS code treats it as meters when deriving touchdown-zone elevation
+  Keep that distinction in mind when setting up fake ILS tests. A value such as
+  `INPUT.ALTBUG 100` means roughly a 100 meter altitude bug for the synthetic
+  TDZE calculation, not 100 feet.
 
 ## Cross-Repo Dependency
 
