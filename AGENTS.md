@@ -175,10 +175,25 @@ simulation based on current GPS/knob state.
 - `test.sh` is not intended to aim the airplane straight at the runway. It uses
   the first track point as the starting fix over Bainbridge Island and the
   second track point as a scripted intercept leg for KBFI ILS 14R.
-- The current second `test.sh` track point is about 10 NM from the start on
-  roughly `180.5` degrees true. That sets up about a 30 degree intercept to the
-  KBFI 14R final approach course, which is about `150.5` degrees true after
+- The `test.sh` track points should represent a realistic ILS intercept flow:
+  lateral guidance should be intercepted and captured well before the simulated
+  aircraft reaches glideslope capture. If the test begins too close to the
+  airport, the csim can make localizer and glideslope capture appear too
+  simultaneous, which is less representative of a real approach.
+- The current `test.sh` geometry is the earlier Bainbridge-to-KBFI 14R
+  intercept translated about two nautical miles farther from the airport along
+  the runway 14R approach corridor. Both the starting point and the scripted
+  intercept waypoint were moved outbound along the reciprocal of the 14R final
+  approach course, preserving the roughly 30 degree intercept angle while
+  giving the simulated aircraft more time on lateral guidance before the
+  glideslope becomes active.
+- The current second `test.sh` track point is still about 10 NM from the start
+  on roughly `180.5` degrees true. That sets up about a 30 degree intercept to
+  the KBFI 14R final approach course, which is about `150.5` degrees true after
   magnetic variation.
+- The `test.sh` csim duration should be long enough for the farther-out start
+  to descend to a low altitude after localizer/glideslope capture. It is
+  intentionally longer than the original near-airport test duration.
 - While the lateral CDI is pegged at `abs(hd) >= 2.0`, the csim ILS follower
   should not steer from the CDI. It should let the scripted waypoint leg fly
   the intercept, similar to how a pilot would avoid chasing a pegged CDI.

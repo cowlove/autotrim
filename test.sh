@@ -7,13 +7,13 @@ AP 1
 INPUT.ALTBUG 0
 INPUT.VLOCBUG 0
 INPUT.MODE 5
-47.679140933777035, -122.33932295359429 1000
-47.5125928940778, -122.34147483386042 50
+47.70813066084988, -122.36369934517762 1000
+47.54158263617579, -122.36577368233236 50
 
 EOF
 
 make BOARD=csim -j2 && \
-./autotrim_csim --seconds 305 --tracksim ./tracksim.txt > out.txt && \
+./autotrim_csim --seconds 425 --tracksim ./tracksim.txt > out.txt && \
 awk '
 	/Chose/ { approach=$0 }
 	/TSIM/ { line=$0; mode=$5; hd=$7; trk=$17; xte=$21 }
