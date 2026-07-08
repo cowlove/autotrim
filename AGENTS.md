@@ -199,6 +199,13 @@ simulation based on current GPS/knob state.
   changing the track-sim call rate can effectively change simulated aircraft
   gain. If the regression still captures the localizer/glideslope and `TSIM`
   values remain sane, do not over-tune this low-resolution test model.
+- After the GPS-coasting CDI smoothing work, `out.txt` may show the simulated
+  ILS approach finishing with CDI needle values clamped closer to zero than
+  before. This is acceptable for now. The purpose of the csim regression is to
+  catch gross failures in approach selection, needle capture, final-course
+  tracking, and localizer cross-track error; it is not a high-fidelity aircraft
+  dynamics model. Leave the tighter convergence alone unless the simulation
+  starts hiding a real regression or mis-flying the scripted intercept.
 - The `TSIM range` field is distance to the active `WaypointSequencer`
   waypoint, not necessarily distance to the runway or TDZ. With the current
   intercept-leg test, do not use `range` as a runway-arrival assertion.
