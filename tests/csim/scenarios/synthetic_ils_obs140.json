@@ -1,0 +1,28 @@
+{
+  "name": "synthetic_ils_obs140",
+  "description": "Synthetic ILS from OBS 140 magnetic after a setup leg establishes current track.",
+  "seconds": 120,
+  "track": [
+    "SPEED 100",
+    "AP 1",
+    "INPUT.ALTBUG 100",
+    "INPUT.VLOCBUG 140",
+    "47.70813066084988, -122.36369934517762 1000",
+    "47.6998032598224, -122.36380732512066 1000",
+    "INPUT.MODE 5",
+    "47.54158263617579, -122.36577368233236 1000"
+  ],
+  "expect_output": [
+    "Started ILS"
+  ],
+  "reject_output": [
+    "Chose 'KBFI"
+  ],
+  "expect_final_tsim": {
+    "mode": 5,
+    "hd": [-0.2, 0.2],
+    "vd": [-0.2, 0.2],
+    "trk": [150, 161],
+    "xte": [-10, 10]
+  }
+}

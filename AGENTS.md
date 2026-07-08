@@ -22,8 +22,8 @@ design intent, caveats, and workflows that future agents need.
 - The main runtime is in `autotrim.ino`.
 - `Makefile` owns the build targets.
 - `README.md` is user-facing documentation; keep this file agent-facing.
-- Helper/test utilities include `test.sh`, `parseG5cat.cpp`, `parse_sweep.cpp`,
-  and `sendcmd.sh`.
+- Helper/test utilities include `test.sh`, `tests/csim/run.py`,
+  `parseG5cat.cpp`, `parse_sweep.cpp`, and `sendcmd.sh`.
 
 ## Build And Test
 
@@ -32,9 +32,15 @@ design intent, caveats, and workflows that future agents need.
 - Host simulation target: `make BOARD=csim`
   - Builds `./autotrim_csim`.
 - Regression harness: `./test.sh`
-  - Builds/runs the csim target.
-  - Exercises mode 5 ILS simulation through `--tracksim`.
-  - Looks for `TSIM` status output from the simulated track model.
+  - Thin compatibility wrapper around `python3 tests/csim/run.py`.
+  - Builds the csim target once with `make BOARD=csim -j2`.
+  - Runs every JSON scenario in `tests/csim/scenarios/` unless specific
+    scenario names are passed.
+  - Writes generated track files and simulator output under `tests/csim/out/`.
+  - Parses the final `TSIM` status line into named fields and compares those
+    fields against scenario-defined pass/fail ranges.
+  - Supports output regex assertions such as built-in approach selection
+    (`Chose 'KBFI 14R'`) or synthetic ILS creation (`Started ILS`).
 - The csim build has a known benign `ARDUINO` redefinition warning from the
   `esp32csim` include path.
 - Before committing code changes, prefer at least:
@@ -229,19 +235,39 @@ simulation based on current GPS/knob state.
 - The `TSIM range` field is distance to the active `WaypointSequencer`
   waypoint, not necessarily distance to the runway or TDZ. With the current
   intercept-leg test, do not use `range` as a runway-arrival assertion.
-- The current regression assertion in `test.sh` checks:
+- Csim regression scenarios live in `tests/csim/scenarios/*.json`.
+  Scenario files should be named for behavior, not sequence numbers. Prefer
+  names such as `kbfi_14r_builtin.json` and `synthetic_ils_obs140.json` over
+  root-level scripts such as `test2.sh`.
+- Each csim scenario owns:
+  - `seconds`: simulator duration
+  - `track`: the literal `WaypointSequencer` track/input lines to feed through
+    `--tracksim`
+  - `expect_output`: regexes that must appear in simulator output
+  - `reject_output`: regexes that must not appear
+  - `expect_final_tsim`: exact values or `[min, max]` ranges for parsed final
+    `TSIM` fields
+- Parsed final `TSIM` fields currently include:
+  - `t`
+  - `mode`
+  - `hd`
+  - `vd`
+  - `lat`
+  - `lon`
+  - `alt`
+  - `trk`
+  - `range`
+  - `xte`
+- The built-in KBFI regression assertion checks:
   - built-in approach selection chose `KBFI 14R`
   - mode is `5`
   - lateral CDI is near centered (`hd` close to zero)
   - simulated track is near the KBFI 14R final approach course
   - localizer cross-track error is small
-- `test.sh` should use the current csim binary flow:
-  - `make BOARD=csim`
-  - `./autotrim_csim`
-- `test2.sh` exercises the synthetic/fake ILS entry path instead of the
-  built-in KBFI approach-selection path. In this path, entering mode 5 with a
-  nonzero VLOC/OBS course creates a fictional ILS in front of the simulated
-  aircraft.
+- `synthetic_ils_obs140.json` exercises the synthetic/fake ILS entry path
+  instead of the built-in KBFI approach-selection path. In this path, entering
+  mode 5 with a nonzero VLOC/OBS course creates a fictional ILS in front of the
+  simulated aircraft.
 - For synthetic ILS csim tests, do not set `INPUT.MODE 5` before the simulator
   has flown enough to establish a meaningful current track. If mode 5 is set
   before or at the first waypoint, `navFix.track` can still be `0.0`, so the

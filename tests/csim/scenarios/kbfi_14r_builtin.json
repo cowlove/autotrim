@@ -1,0 +1,23 @@
+{
+  "name": "kbfi_14r_builtin",
+  "description": "Built-in KBFI ILS 14R approach selection and localizer capture.",
+  "seconds": 425,
+  "track": [
+    "SPEED 100",
+    "AP 1",
+    "INPUT.ALTBUG 0",
+    "INPUT.VLOCBUG 0",
+    "INPUT.MODE 5",
+    "47.70813066084988, -122.36369934517762 700",
+    "47.54158263617579, -122.36577368233236 50"
+  ],
+  "expect_output": [
+    "Chose 'KBFI 14R'"
+  ],
+  "expect_final_tsim": {
+    "mode": 5,
+    "hd": [-0.2, 0.2],
+    "trk": [145, 156],
+    "xte": [-10, 10]
+  }
+}
