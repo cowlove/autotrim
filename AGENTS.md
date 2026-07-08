@@ -187,6 +187,18 @@ simulation based on current GPS/knob state.
   small lateral CDI and cross-track error.
 - Vertical correction follows the same alive/pegged idea independently:
   glideslope correction should wait while `abs(vd) >= 2.0`.
+- Do not confuse the SL30 output path with csim aircraft dynamics. The runtime
+  code emits `sl30.setCDI(hd, vd)` from the 100 ms loop so hardware sees smooth
+  needle commands, but csim aircraft motion is driven from the `hd`/`vd` globals
+  inside `runTrackSim()`.
+- The newer csim ILS follower path (`flyIlsNeedles()`) bypasses
+  `WaypointTracker::setCDI()` once an active, non-pegged ILS needle is available
+  and applies its own per-timestep heading/vertical motion. The older fallback
+  path still calls `tSim.wptTracker.setCDI(hd, vd, ...)` from the track-sim loop;
+  that helper contains hardcoded correction gains and derivative terms, so
+  changing the track-sim call rate can effectively change simulated aircraft
+  gain. If the regression still captures the localizer/glideslope and `TSIM`
+  values remain sane, do not over-tune this low-resolution test model.
 - The `TSIM range` field is distance to the active `WaypointSequencer`
   waypoint, not necessarily distance to the runway or TDZ. With the current
   intercept-leg test, do not use `range` as a runway-arrival assertion.
