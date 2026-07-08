@@ -181,12 +181,17 @@ simulation based on current GPS/knob state.
   airport, the csim can make localizer and glideslope capture appear too
   simultaneous, which is less representative of a real approach.
 - The current `test.sh` geometry is the earlier Bainbridge-to-KBFI 14R
-  intercept translated about four nautical miles farther from the airport along
+  intercept translated about two nautical miles farther from the airport along
   the runway 14R approach corridor. Both the starting point and the scripted
   intercept waypoint were moved outbound along the reciprocal of the 14R final
   approach course, preserving the roughly 30 degree intercept angle while
   giving the simulated aircraft more time on lateral guidance before the
   glideslope becomes active.
+- The first `test.sh` waypoint altitude is intentionally lower than the old
+  `1000` meter value. The track simulator waypoint altitudes are meters, and a
+  lower start altitude helps the aircraft intercept the localizer before the
+  glideslope without moving the whole scenario so far from KBFI that approach
+  selection becomes delayed or less representative.
 - The current second `test.sh` track point is still about 10 NM from the start
   on roughly `180.5` degrees true. That sets up about a 30 degree intercept to
   the KBFI 14R final approach course, which is about `150.5` degrees true after
