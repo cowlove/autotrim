@@ -4,6 +4,18 @@ This file is repo-local guidance for AI/coding agents working on `autotrim`.
 Keep private/user-specific memory out of this file; commit only project facts,
 design intent, caveats, and workflows that future agents need.
 
+## Documentation Style
+
+- Keep this file verbose as the project evolves. When a decision, boundary,
+  assumption, hardware caveat, simulation behavior, or debugging lesson affects
+  future work, write it down here in enough detail that the next session can
+  recover the reasoning without needing chat history.
+- Prefer explicit project notes over terse reminders. This project has several
+  subtle data-source boundaries, mode semantics, and simulator-vs-hardware
+  differences; document those boundaries when they are discovered or clarified.
+- Do not use this file for private/user-specific memory. It should contain
+  durable project facts and engineering guidance that belongs with the repo.
+
 ## Project Shape
 
 - `autotrim` is an embedded ESP32/Arduino-style navigation display project.
