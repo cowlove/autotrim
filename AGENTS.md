@@ -56,22 +56,40 @@ design intent, caveats, and workflows that future agents need.
 
 ## GPS / NMEA State
 
-- The restored ILS code uses the historical `GDL90Parser::State` shape via
-  `currentState`.
+- ILS calculations use the internal `NavFixState` shape via `navFix`.
+- Do not use `GDL90Parser::State` as general navigation state. That structure
+  belongs to the GDL90 parser/wire format and should not grow unrelated
+  internal fix fields.
 - NMEA is parsed with TinyGPSPlus.
 - NMEA can arrive as:
   - raw NMEA on `Serial2`
   - command lines prefixed with `NMEA=`
   - raw `$...` / `!...` NMEA lines passed through the command parser
-- Mode 5 waits for a valid GPS fix before creating/updating the ILS simulator.
-- Open field concern: verify real hardware provides usable lat/lon and either
-  GPS altitude or an acceptable pressure-altitude fallback.
+- Mode 5 waits for valid NMEA GPS-derived position, track, speed, and altitude
+  before creating/updating the ILS simulator.
+- ILS simulation must not backfill missing NMEA values from CAN or GDL90 data.
+  CAN/GDL90 paths may still parse, report, and forward their own data elsewhere
+  in the program.
+- CAN pressure altitude remains raw G5/CAN data in `isrData.palt`. Do not feed
+  it into `navFix.altMeters` unless an explicit, altimeter-corrected conversion
+  policy is added.
+- A previously valid GPS fix may be reused only briefly. The current limit is
+  `GPS_FIX_STALE_MS == 2000`, so mode 5 can coast for about two seconds after
+  the last fresh NMEA location, then it stops updating CDI and reports that it
+  is waiting for GPS again.
+- While the NMEA fix is fresh, the 100 ms G5/SL30 loop should call `setCDI()`
+  using a short dead-reckoned position from the last fix, track, and groundspeed
+  rather than holding the last NMEA lat/lon until the next sentence arrives.
+- TinyGPSPlus `location.isValid()` is sticky after a prior good fix, so NMEA
+  freshness should be judged with `location.age()` and `navFix.timestamp`,
+  not `isValid()` alone.
+- Open field concern: verify real hardware provides usable lat/lon and GPS
+  altitude, or deliberately design a corrected baro-altitude fallback.
 
 ## ILS Simulation
 
 - Mode 5 revives the historical `WaypointNav::IlsSimulator` behavior.
 - `autotrim.ino` includes nav helpers from the sibling `../winglevlr` repo:
-  - `../winglevlr/GDL90Parser.h`
   - `../winglevlr/WaypointNav.h`
 - The ILS simulator computes CDI/glideslope percentages, scales them by `2.0`,
   and sends them to the SL30 path with `sl30.setCDI(hd, vd)`.
@@ -121,8 +139,8 @@ simulation based on current GPS/knob state.
 
 - `--tracksim` is re-enabled in the csim path.
 - The track simulator uses `WaypointNav::WaypointSequencer`.
-- Simulated GPS state is fed back through `currentState`, matching the ILS code
-  path used on hardware.
+- Simulated GPS state is fed back through `navFix`, matching the ILS code path
+  used on hardware.
 - A stable `TSIM` line is emitted for the regression harness.
 - `test.sh` is not intended to aim the airplane straight at the runway. It uses
   the first track point as the starting fix over Bainbridge Island and the

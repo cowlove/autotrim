@@ -19,7 +19,6 @@
 #include "jimlib.h"
 #include "dataTools.h"
 // The historical ILS simulator lives in the winglevlr nav helpers.
-#include "../winglevlr/GDL90Parser.h"
 #include "../winglevlr/WaypointNav.h"
 #include "espNowMux.h"
 #include "reliableStream.h"
@@ -33,9 +32,18 @@ using namespace WaypointNav;
 
 //WiFiMulti wifi;
 //WiFiUDP udpG90;
-// Keep this old state shape so the revived ILS code can share its original inputs.
-GDL90Parser::State currentState;
+struct NavFixState {
+	double lat, lon;
+	float track;
+	float altMeters;
+	float hvelKnots;
+	uint32_t timestamp;
+	bool updated, valid, hasTrack, hasSpeed, hasAltitude;
+};
+
+static NavFixState navFix;
 TinyGPSPlus nmeaGps;
+static const uint32_t GPS_FIX_STALE_MS = 2000;
 
 static float g5KnobValues[6];
 static double hd = -2, vd = -2; // cdi deflections 
@@ -610,25 +618,51 @@ bool wifiTryConnectNO(const char *ap, const char *pw, int seconds = 15) {
 }
 
 void updateFixFromNmea() {
-	if (!nmeaGps.location.isValid())
+	if (!nmeaGps.location.isValid() || nmeaGps.location.age() > GPS_FIX_STALE_MS)
 		return;
-	currentState.lat = nmeaGps.location.lat();
-	currentState.lon = nmeaGps.location.lng();
-	if (nmeaGps.course.isValid())
-		currentState.track = nmeaGps.course.deg();
-	else if (isrData.magTrack != 0)
-		currentState.track = magToTrue(isrData.magTrack * 180/M_PI);
-	if (nmeaGps.altitude.isValid()) {
-		currentState.alt = nmeaGps.altitude.meters();
-		currentState.palt = ((currentState.alt * FEET_PER_METER) + 1000) / 25;
-	} else if (isrData.palt > 0) {
-		currentState.alt = isrData.palt;
-		currentState.palt = ((currentState.alt * FEET_PER_METER) + 1000) / 25;
+	navFix.lat = nmeaGps.location.lat();
+	navFix.lon = nmeaGps.location.lng();
+	if (nmeaGps.course.isValid() && nmeaGps.course.age() <= GPS_FIX_STALE_MS) {
+		navFix.track = nmeaGps.course.deg();
+		navFix.hasTrack = true;
+	} else {
+		navFix.hasTrack = false;
 	}
-	if (nmeaGps.speed.isValid())
-		currentState.hvel = nmeaGps.speed.knots();
-	currentState.updated = true;
-	currentState.valid = true;
+	if (nmeaGps.altitude.isValid() && nmeaGps.altitude.age() <= GPS_FIX_STALE_MS) {
+		navFix.altMeters = nmeaGps.altitude.meters();
+		navFix.hasAltitude = true;
+	} else {
+		navFix.hasAltitude = false;
+	}
+	if (nmeaGps.speed.isValid() && nmeaGps.speed.age() <= GPS_FIX_STALE_MS) {
+		navFix.hvelKnots = nmeaGps.speed.knots();
+		navFix.hasSpeed = true;
+	} else {
+		navFix.hasSpeed = false;
+	}
+	navFix.timestamp = millis() - nmeaGps.location.age();
+	navFix.updated = true;
+	navFix.valid = true;
+}
+
+bool hasFreshGpsFix() {
+	return navFix.valid && (uint32_t)(millis() - navFix.timestamp) <= GPS_FIX_STALE_MS;
+}
+
+LatLon coastedGpsPosition() {
+	uint32_t fixAgeMs = millis() - navFix.timestamp;
+	double distanceMeters = navFix.hvelKnots * 0.514444 * fixAgeMs / 1000.0;
+	return locationBearingDistance(LatLon(navFix.lat, navFix.lon), navFix.track, distanceMeters);
+}
+
+void expireStaleGpsFix() {
+	if (navFix.valid && !hasFreshGpsFix()) {
+		navFix.valid = false;
+		navFix.updated = false;
+		navFix.hasTrack = false;
+		navFix.hasSpeed = false;
+		navFix.hasAltitude = false;
+	}
 }
 
 // Serial and ESP-NOW command paths can both provide NMEA, so parse by line here.
@@ -870,6 +904,7 @@ void loop() {
 	static EggTimer g5Timer(100);
 
 	if (g5Timer.tick()) { 
+		expireStaleGpsFix();
 		if (debugMoveNeedles || isrData.mode == 6 || startupPeriod > 0) { 
 			hd += .05;
 			vd += .075;
@@ -881,8 +916,8 @@ void loop() {
 			Serial2.print(s.c_str());
 			//Serial.print(s.c_str());
 		}
-		if (isrData.mode == 5 && currentState.valid) {
-			LatLon now(currentState.lat, currentState.lon);
+		if (isrData.mode == 5 && hasFreshGpsFix() && navFix.hasTrack && navFix.hasSpeed && navFix.hasAltitude) {
+			LatLon now = coastedGpsPosition();
 			if (ils == NULL) {
 				float vlocTrk = g5KnobValues[4] * 180/M_PI;
 				float altBug = g5KnobValues[2];
@@ -895,8 +930,8 @@ void loop() {
 					float tdze = altBug - 200 / 3.281;
 					// Put the final approach intercept 3 km ahead, then project to the touchdown point
 					// using the selected course and a 3 degree glideslope from the current altitude.
-					LatLon facIntercept = locationBearingDistance(now, currentState.track, 3000);
-					float facDist = (currentState.alt - tdze) / tan(gs * M_PI/180);
+					LatLon facIntercept = locationBearingDistance(now, navFix.track, 3000);
+					float facDist = (navFix.altMeters - tdze) / tan(gs * M_PI/180);
 					LatLon tdz = locationBearingDistance(facIntercept, magToTrue(vlocTrk), facDist);
 					// The simulator uses TDZ for glide slope, and a projected localizer antenna
 					// DEFAULT_RUNWAY_LENGTH_FT + 1000 ft past TDZ for lateral CDI sensitivity.
@@ -912,14 +947,21 @@ void loop() {
 				}
 			}
 			if (ils != NULL) {
-				ils->setCurrentLocation(now, currentState.alt);
+				ils->setCurrentLocation(now, navFix.altMeters);
 				hd = ils->cdiPercent() * 2.0;
 				vd = ils->gsPercent() * 2.0;
 				std::string s = sl30.setCDI(hd, vd);
 				Serial2.print(s.c_str());
 			}
-		} else if (isrData.mode == 5 && !currentState.valid && ilsWaitReportTimer.tick()) {
-			Serial.println("ILS mode waiting for GPS fix");
+		} else if (isrData.mode == 5 && (!navFix.valid || !navFix.hasTrack || !navFix.hasSpeed || !navFix.hasAltitude) && ilsWaitReportTimer.tick()) {
+			if (!navFix.valid)
+				Serial.println("ILS mode waiting for GPS fix");
+			else if (!navFix.hasTrack)
+				Serial.println("ILS mode waiting for GPS track");
+			else if (!navFix.hasSpeed)
+				Serial.println("ILS mode waiting for GPS speed");
+			else
+				Serial.println("ILS mode waiting for GPS altitude");
 		} else if (ils != NULL) {
 			resetIlsSimulator();
 		}
@@ -976,19 +1018,19 @@ class ESP32sim_autotrim : Csim_Module {
 		if (tSim.wptTracker.prevPos.valid)
 			actualTrack = bearing(tSim.wptTracker.prevPos.loc, p.loc);
 
-		currentState.lat = p.loc.lat;
-		currentState.lon = p.loc.lon;
-		currentState.alt = p.alt;
-		currentState.track = actualTrack;
-		currentState.vvel = tSim.wptTracker.vvel;
-		currentState.hvel = tSim.wptTracker.speed;
-		currentState.palt = ((p.alt * FEET_PER_METER) + 1000) / 25;
-		currentState.timestamp = millis();
-		currentState.updated = true;
-		currentState.valid = true;
+		navFix.lat = p.loc.lat;
+		navFix.lon = p.loc.lon;
+		navFix.altMeters = p.alt;
+		navFix.track = actualTrack;
+		navFix.hvelKnots = tSim.wptTracker.speed;
+		navFix.timestamp = millis();
+		navFix.updated = true;
+		navFix.valid = true;
+		navFix.hasTrack = true;
+		navFix.hasSpeed = true;
+		navFix.hasAltitude = true;
 
-		isrData.magTrack = DEG2RAD(trueToMag(currentState.track));
-		isrData.palt = currentState.alt;
+		isrData.magTrack = DEG2RAD(trueToMag(navFix.track));
 		isrData.timestamp = millis();
 	}
 
@@ -1038,8 +1080,8 @@ class ESP32sim_autotrim : Csim_Module {
 				? distance(p.loc, tSim.wptTracker.activeWaypoint.loc)
 				: -1;
 			printf("TSIM t %.1f mode %d hd %.3f vd %.3f lat %.7f lon %.7f alt %.1f trk %.1f range %.1f xte %.1f\n",
-				millis() / 1000.0, isrData.mode, hd, vd, currentState.lat, currentState.lon,
-				(float)currentState.alt, currentState.track, range, tSim.wptTracker.xte);
+				millis() / 1000.0, isrData.mode, hd, vd, navFix.lat, navFix.lon,
+				(float)navFix.altMeters, navFix.track, range, tSim.wptTracker.xte);
 		}
 	}
 			
