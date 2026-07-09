@@ -178,6 +178,8 @@ struct DummyLoopTime {
 uint64_t lastLoopTime = -1;
 EggTimer serialReportTimer(500), displayTimer(1000);
 EggTimer canReportTimer(100), canResetTimer(5000), sl30Heartbeat(1000), sdCardFlush(2000), ilsWaitReportTimer(2000);
+static const int CAN_DRAIN_BEFORE_ESPNOW_PKTS = 200;
+static const uint32_t ESPNOW_PENDING_CAN_REPORT_MAX_MS = 250;
 
 uint64_t nextCmdTime = 0;
 static bool debugMoveNeedles = false;
@@ -187,6 +189,8 @@ ReliableStreamESPNow espnow("G5", true/*alwaysBroadcast*/);
 static int espnowPackets = 0;
 static int espnowReportsSkippedForCan = 0;
 static bool espnowCanReportPending = false;
+static uint32_t espnowCanReportPendingSince = 0;
+static int espnowCanReportsSentOverBusyCan = 0;
 
 // send udp packet multiple times on broadcast address and all addresses in normal EchoUAT wifi range 
 void superSend(const char *b) { 
@@ -832,16 +836,23 @@ void loop() {
 		processCommand(s.c_str(), s.length());
 	}
 
-	canPacketsThisLoop += can->run(0, 100);
+	canPacketsThisLoop += can->run(0, CAN_DRAIN_BEFORE_ESPNOW_PKTS);
 	bool canIdleForTelemetry = canPacketsThisLoop == 0;
 
 	if (canReportTimer.tick()/* || isrData.forceSend*/) {
 		espnowCanReportPending = true;
+		if (espnowCanReportPendingSince == 0)
+			espnowCanReportPendingSince = millis();
 		if (!canIdleForTelemetry)
 			espnowReportsSkippedForCan++;
 	}
-	if (espnowCanReportPending && canIdleForTelemetry) {
+	bool espnowCanReportOverdue = espnowCanReportPending &&
+		(uint32_t)(millis() - espnowCanReportPendingSince) >= ESPNOW_PENDING_CAN_REPORT_MAX_MS;
+	if (espnowCanReportPending && (canIdleForTelemetry || espnowCanReportOverdue)) {
+		if (!canIdleForTelemetry)
+			espnowCanReportsSentOverBusyCan++;
 		espnowCanReportPending = false;
+		espnowCanReportPendingSince = 0;
 		isrData.forceSend = false;
 		//Serial.printf("%08d %d\n", (int)millis(), isrData.mode);
 		sendCanData();
@@ -851,11 +862,12 @@ void loop() {
 		//digitalWrite(pins.led, !digitalRead(pins.led));
 		char buf[256]; 
 		snprintf(buf, sizeof(buf), "L: %08.3f %05.3f/%05.3f/%05.3f "
-		"m:%d appkt:%d skip:%d can:%d drop:%d qlen:%d serIn:%d "
+		"m:%d appkt:%d skip:%d forced:%d can:%d drop:%d qlen:%d serIn:%d "
 		"%d\n", 
 		millis() / 1000.0, 
 		loopTimeAvg.average()/1000.0, loopTimeAvg.min()/1000.0, loopTimeAvg.max()/1000.0, 
-		isrData.mode, espnowPackets, espnowReportsSkippedForCan, can->isrCount, can->dropped, can->getQueueLen(), serialBytesIn,
+		isrData.mode, espnowPackets, espnowReportsSkippedForCan, espnowCanReportsSentOverBusyCan,
+		can->isrCount, can->dropped, can->getQueueLen(), serialBytesIn,
 		0);
 		Serial.print(buf);
 
