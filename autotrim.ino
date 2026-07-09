@@ -45,6 +45,55 @@ static NavFixState navFix;
 TinyGPSPlus nmeaGps;
 static const uint32_t GPS_FIX_STALE_MS = 2000;
 
+struct SensorFusionState {
+	static const int GPS_ALT_SAMPLES = 5;
+	float gpsAltSamples[GPS_ALT_SAMPLES];
+	int gpsAltSampleCount = 0;
+	int gpsAltSampleNext = 0;
+	uint32_t lastGpsAltTimestamp = 0;
+	float anchorGpsAltMeters = 0;
+	float anchorPressureAltFeet = 0;
+	bool hasAltitudeAnchor = false;
+	bool hasPressureAnchor = false;
+
+	void updateGpsAltitude(float altMeters, uint32_t gpsTimestamp, float pressureAltFeet, bool hasPressureAlt) {
+		if (gpsTimestamp == lastGpsAltTimestamp)
+			return;
+		lastGpsAltTimestamp = gpsTimestamp;
+
+		gpsAltSamples[gpsAltSampleNext] = altMeters;
+		gpsAltSampleNext = (gpsAltSampleNext + 1) % GPS_ALT_SAMPLES;
+		if (gpsAltSampleCount < GPS_ALT_SAMPLES)
+			gpsAltSampleCount++;
+
+		float sum = 0;
+		for (int i = 0; i < gpsAltSampleCount; i++)
+			sum += gpsAltSamples[i];
+		anchorGpsAltMeters = sum / gpsAltSampleCount;
+		anchorPressureAltFeet = pressureAltFeet;
+		hasPressureAnchor = hasPressureAlt;
+		hasAltitudeAnchor = true;
+	}
+
+	bool hasFusedAltitude() const {
+		return hasAltitudeAnchor;
+	}
+
+	float fusedAltitudeMeters(float pressureAltFeet, bool hasPressureAlt) const {
+		if (!hasAltitudeAnchor)
+			return navFix.altMeters;
+		if (!hasPressureAnchor || !hasPressureAlt)
+			return anchorGpsAltMeters;
+
+		// GPS is the absolute reference. Pressure altitude is used only for
+		// high-rate delta since the last GPS altitude anchor.
+		float pressureDeltaMeters = (pressureAltFeet - anchorPressureAltFeet) / FEET_PER_METER;
+		return anchorGpsAltMeters + pressureDeltaMeters;
+	}
+};
+
+static SensorFusionState sensorFusion;
+
 static float g5KnobValues[6];
 static double hd = -2, vd = -2; // cdi deflections 
 
@@ -193,7 +242,7 @@ void superSend(const char *b) {
 struct IsrData {
 	float pitch, roll, knobVal = 0, magHdg, magTrack, ias, tas, palt, slip;
 	int knobSel, mode;
-	bool forceSend;
+	bool forceSend, hasPalt;
 	uint32_t timestamp;
 	uint8_t *bufIn, *bufOut; 
 	int exceptions;
@@ -559,9 +608,11 @@ void canParse(int id, int len, uint32_t timestamp, const uint8_t *ibuf) {
 			isrData.timestamp = millis();
 			isrData.ias = ias; 
 			isrData.palt = palt;
+			isrData.hasPalt = true;
 			isrData.tas = tas;
 		} catch(...) {
 			isrData.ias = isrData.tas = isrData.palt = 0; 
+			isrData.hasPalt = false;
 			isrData.exceptions++;
 		}
 		//sendCanData(false);
@@ -631,6 +682,11 @@ void updateFixFromNmea() {
 	if (nmeaGps.altitude.isValid() && nmeaGps.altitude.age() <= GPS_FIX_STALE_MS) {
 		navFix.altMeters = nmeaGps.altitude.meters();
 		navFix.hasAltitude = true;
+		sensorFusion.updateGpsAltitude(
+			navFix.altMeters,
+			millis() - nmeaGps.altitude.age(),
+			isrData.palt,
+			isrData.hasPalt);
 	} else {
 		navFix.hasAltitude = false;
 	}
@@ -653,6 +709,12 @@ LatLon coastedGpsPosition() {
 	uint32_t fixAgeMs = millis() - navFix.timestamp;
 	double distanceMeters = navFix.hvelKnots * 0.514444 * fixAgeMs / 1000.0;
 	return locationBearingDistance(LatLon(navFix.lat, navFix.lon), navFix.track, distanceMeters);
+}
+
+float fusedGpsAltitudeMeters() {
+	return sensorFusion.hasFusedAltitude()
+		? sensorFusion.fusedAltitudeMeters(isrData.palt, isrData.hasPalt)
+		: navFix.altMeters;
 }
 
 void expireStaleGpsFix() {
@@ -918,6 +980,7 @@ void loop() {
 		}
 		if (isrData.mode == 5 && hasFreshGpsFix() && navFix.hasTrack && navFix.hasSpeed && navFix.hasAltitude) {
 			LatLon now = coastedGpsPosition();
+			float altMeters = fusedGpsAltitudeMeters();
 			if (ils == NULL) {
 				float vlocTrk = g5KnobValues[4] * 180/M_PI;
 				float altBug = g5KnobValues[2];
@@ -931,7 +994,7 @@ void loop() {
 					// Put the final approach intercept 3 km ahead, then project to the touchdown point
 					// using the selected course and a 3 degree glideslope from the current altitude.
 					LatLon facIntercept = locationBearingDistance(now, navFix.track, 3000);
-					float facDist = (navFix.altMeters - tdze) / tan(gs * M_PI/180);
+					float facDist = (altMeters - tdze) / tan(gs * M_PI/180);
 					LatLon tdz = locationBearingDistance(facIntercept, magToTrue(vlocTrk), facDist);
 					// The simulator uses TDZ for glide slope, and a projected localizer antenna
 					// DEFAULT_RUNWAY_LENGTH_FT + 1000 ft past TDZ for lateral CDI sensitivity.
@@ -947,7 +1010,7 @@ void loop() {
 				}
 			}
 			if (ils != NULL) {
-				ils->setCurrentLocation(now, navFix.altMeters);
+				ils->setCurrentLocation(now, altMeters);
 				hd = ils->cdiPercent() * 2.0;
 				vd = ils->gsPercent() * 2.0;
 				std::string s = sl30.setCDI(hd, vd);
@@ -1030,8 +1093,11 @@ class ESP32sim_autotrim : Csim_Module {
 		navFix.hasSpeed = true;
 		navFix.hasAltitude = true;
 
+		isrData.palt = p.alt * FEET_PER_METER;
+		isrData.hasPalt = true;
 		isrData.magTrack = DEG2RAD(trueToMag(navFix.track));
 		isrData.timestamp = millis();
+		sensorFusion.updateGpsAltitude(navFix.altMeters, navFix.timestamp, isrData.palt, isrData.hasPalt);
 	}
 
 	bool flyIlsNeedles(float sec) {

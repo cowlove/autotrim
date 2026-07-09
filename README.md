@@ -30,9 +30,10 @@ NMEA position data can arrive in three forms:
 - Command lines prefixed with `NMEA=`
 - Raw NMEA command lines passed through the command parser
 
-NMEA is parsed with TinyGPSPlus and stored in the `currentState` object. That
-object intentionally keeps the old `GDL90Parser::State` shape because the
-historical ILS simulation code used that state type.
+NMEA is parsed with TinyGPSPlus and stored in `navFix`. Mode 5 uses GPS as the
+absolute position and altitude reference. For smoother vertical CDI movement,
+GPS altitude is smoothed over a small sample window and high-rate G5 pressure
+altitude contributes only the change since the latest GPS altitude anchor.
 
 ## Modes
 
