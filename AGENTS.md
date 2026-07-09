@@ -91,7 +91,7 @@ design intent, caveats, and workflows that future agents need.
 - CAN pressure altitude remains raw G5/CAN data in `isrData.palt`. Do not feed
   its absolute value into `navFix.altMeters` unless an explicit,
   altimeter-corrected conversion policy is added.
-- Vertical CDI calculations use `SensorFusionState`: NMEA GPS altitude is kept
+- Vertical CDI calculations use `SensorFusion` in `SensorFusion.h`: NMEA GPS altitude is kept
   as the absolute reference and smoothed over a small sample window, while G5
   pressure altitude contributes only the high-rate delta since the latest GPS
   altitude anchor.

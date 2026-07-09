@@ -26,6 +26,7 @@
 #include "sl30.h"
 #include "buttonTools.h"
 #include "TTGO_TS.h"
+#include "SensorFusion.h"
 
 using namespace WaypointNav;
 //#define LED_PIN 2
@@ -45,54 +46,7 @@ static NavFixState navFix;
 TinyGPSPlus nmeaGps;
 static const uint32_t GPS_FIX_STALE_MS = 2000;
 
-struct SensorFusionState {
-	static const int GPS_ALT_SAMPLES = 5;
-	float gpsAltSamples[GPS_ALT_SAMPLES];
-	int gpsAltSampleCount = 0;
-	int gpsAltSampleNext = 0;
-	uint32_t lastGpsAltTimestamp = 0;
-	float anchorGpsAltMeters = 0;
-	float anchorPressureAltFeet = 0;
-	bool hasAltitudeAnchor = false;
-	bool hasPressureAnchor = false;
-
-	void updateGpsAltitude(float altMeters, uint32_t gpsTimestamp, float pressureAltFeet, bool hasPressureAlt) {
-		if (gpsTimestamp == lastGpsAltTimestamp)
-			return;
-		lastGpsAltTimestamp = gpsTimestamp;
-
-		gpsAltSamples[gpsAltSampleNext] = altMeters;
-		gpsAltSampleNext = (gpsAltSampleNext + 1) % GPS_ALT_SAMPLES;
-		if (gpsAltSampleCount < GPS_ALT_SAMPLES)
-			gpsAltSampleCount++;
-
-		float sum = 0;
-		for (int i = 0; i < gpsAltSampleCount; i++)
-			sum += gpsAltSamples[i];
-		anchorGpsAltMeters = sum / gpsAltSampleCount;
-		anchorPressureAltFeet = pressureAltFeet;
-		hasPressureAnchor = hasPressureAlt;
-		hasAltitudeAnchor = true;
-	}
-
-	bool hasFusedAltitude() const {
-		return hasAltitudeAnchor;
-	}
-
-	float fusedAltitudeMeters(float pressureAltFeet, bool hasPressureAlt) const {
-		if (!hasAltitudeAnchor)
-			return navFix.altMeters;
-		if (!hasPressureAnchor || !hasPressureAlt)
-			return anchorGpsAltMeters;
-
-		// GPS is the absolute reference. Pressure altitude is used only for
-		// high-rate delta since the last GPS altitude anchor.
-		float pressureDeltaMeters = (pressureAltFeet - anchorPressureAltFeet) / FEET_PER_METER;
-		return anchorGpsAltMeters + pressureDeltaMeters;
-	}
-};
-
-static SensorFusionState sensorFusion;
+static SensorFusion sensorFusion;
 
 static float g5KnobValues[6];
 static double hd = -2, vd = -2; // cdi deflections 
@@ -713,7 +667,7 @@ LatLon coastedGpsPosition() {
 
 float fusedGpsAltitudeMeters() {
 	return sensorFusion.hasFusedAltitude()
-		? sensorFusion.fusedAltitudeMeters(isrData.palt, isrData.hasPalt)
+		? sensorFusion.fusedAltitudeMeters(navFix.altMeters, isrData.palt, isrData.hasPalt)
 		: navFix.altMeters;
 }
 
