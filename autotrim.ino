@@ -185,6 +185,7 @@ static bool debugMoveNeedles = false;
 static bool first = true;
 ReliableStreamESPNow espnow("G5", true/*alwaysBroadcast*/);
 static int espnowPackets = 0;
+static int espnowReportsSkippedForCan = 0;
 
 // send udp packet multiple times on broadcast address and all addresses in normal EchoUAT wifi range 
 void superSend(const char *b) { 
@@ -267,10 +268,12 @@ public:
 	}
 	void reset() { 
 	}
-	void run(int timeout, int maxPkts = -1) { 
+	int run(int timeout, int maxPkts = -1) {
 		char obuf[128];
 		twai_message_t cp;
+		int processed = 0;
 		while(maxPkts != 0 && twai_receive(&cp, timeout) == ESP_OK) {
+			processed++;
 			isrCount++;
 			if (0) { 
 				printf("CAN %08" PRIx32 " %08" PRIx32 " %08" PRIx32 " %1d",
@@ -302,6 +305,7 @@ public:
 					onCanPacket(cp.identifier, cp.data_length_code, timestamp, cp.data);
 			}
 		}
+		return processed;
 	}
 	static CanWrapper *instancePtr;
 };
@@ -792,7 +796,7 @@ void loop() {
 		can->reset();
 		return;
 	}
-	can->run(pdMS_TO_TICKS(5), 100);
+	int canPacketsThisLoop = can->run(pdMS_TO_TICKS(5), 100);
 
 	
 	while (Serial.available()) { 
@@ -827,21 +831,28 @@ void loop() {
 		processCommand(s.c_str(), s.length());
 	}
 
-	if (canReportTimer.tick()/* || isrData.forceSend*/) { 
-		isrData.forceSend = false;
-		//Serial.printf("%08d %d\n", (int)millis(), isrData.mode);
-		sendCanData();
+	canPacketsThisLoop += can->run(0, 100);
+	bool canIdleForTelemetry = canPacketsThisLoop == 0;
+
+	if (canReportTimer.tick()/* || isrData.forceSend*/) {
+		if (canIdleForTelemetry) {
+			isrData.forceSend = false;
+			//Serial.printf("%08d %d\n", (int)millis(), isrData.mode);
+			sendCanData();
+		} else {
+			espnowReportsSkippedForCan++;
+		}
 	}
 
 	if (serialReportTimer.tick()) {
 		//digitalWrite(pins.led, !digitalRead(pins.led));
 		char buf[256]; 
 		snprintf(buf, sizeof(buf), "L: %08.3f %05.3f/%05.3f/%05.3f "
-		"m:%d appkt: %d can:%d drop:%d qlen:%d serIn:%d "
+		"m:%d appkt:%d skip:%d can:%d drop:%d qlen:%d serIn:%d "
 		"%d\n", 
 		millis() / 1000.0, 
 		loopTimeAvg.average()/1000.0, loopTimeAvg.min()/1000.0, loopTimeAvg.max()/1000.0, 
-		isrData.mode, espnowPackets, can->isrCount, can->dropped, can->getQueueLen(), serialBytesIn,
+		isrData.mode, espnowPackets, espnowReportsSkippedForCan, can->isrCount, can->dropped, can->getQueueLen(), serialBytesIn,
 		0);
 		Serial.print(buf);
 
