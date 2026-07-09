@@ -92,9 +92,10 @@ design intent, caveats, and workflows that future agents need.
   its absolute value into `navFix.altMeters` unless an explicit,
   altimeter-corrected conversion policy is added.
 - Vertical CDI calculations use `SensorFusion` in `SensorFusion.h`: NMEA GPS altitude is kept
-  as the absolute reference and smoothed over a small sample window, while G5
-  pressure altitude contributes only the high-rate delta since the latest GPS
-  altitude anchor.
+  as the absolute reference and smoothed with a small linear fit evaluated at
+  the latest GPS altitude timestamp. This avoids the lag a moving average would
+  introduce during a steady climb or descent. G5 pressure altitude contributes
+  only the high-rate delta since the latest GPS altitude anchor.
 - A previously valid GPS fix may be reused only briefly. The current limit is
   `GPS_FIX_STALE_MS == 2000`, so mode 5 can coast for about two seconds after
   the last fresh NMEA location, then it stops updating CDI and reports that it
