@@ -594,7 +594,7 @@ void canParse(int id, int len, uint32_t timestamp, const uint8_t *ibuf) {
 	static float lastKnobVal = 0;
 	static uint64_t lastKnobMillis = 0;
 	if ((isrData.knobSel == 1/*hdg*/ || isrData.knobSel == 5)  && isrData.knobVal != lastKnobVal) { 
-		if (millis() - lastKnobMillis > 500) 
+		if (millis() - lastKnobMillis > 2500) 
 			setMode(0);
 		lastKnobMillis = millis();
 		double delta = isrData.knobVal - lastKnobVal;
