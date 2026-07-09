@@ -186,6 +186,7 @@ static bool first = true;
 ReliableStreamESPNow espnow("G5", true/*alwaysBroadcast*/);
 static int espnowPackets = 0;
 static int espnowReportsSkippedForCan = 0;
+static bool espnowCanReportPending = false;
 
 // send udp packet multiple times on broadcast address and all addresses in normal EchoUAT wifi range 
 void superSend(const char *b) { 
@@ -835,13 +836,15 @@ void loop() {
 	bool canIdleForTelemetry = canPacketsThisLoop == 0;
 
 	if (canReportTimer.tick()/* || isrData.forceSend*/) {
-		if (canIdleForTelemetry) {
-			isrData.forceSend = false;
-			//Serial.printf("%08d %d\n", (int)millis(), isrData.mode);
-			sendCanData();
-		} else {
+		espnowCanReportPending = true;
+		if (!canIdleForTelemetry)
 			espnowReportsSkippedForCan++;
-		}
+	}
+	if (espnowCanReportPending && canIdleForTelemetry) {
+		espnowCanReportPending = false;
+		isrData.forceSend = false;
+		//Serial.printf("%08d %d\n", (int)millis(), isrData.mode);
+		sendCanData();
 	}
 
 	if (serialReportTimer.tick()) {
