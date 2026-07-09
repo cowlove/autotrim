@@ -101,11 +101,11 @@ design intent, caveats, and workflows that future agents need.
   the last fresh NMEA location, then it stops updating CDI and reports that it
   is waiting for GPS again.
 - While the NMEA fix is fresh, the 100 ms G5/SL30 loop should call `setCDI()`
-  using a short dead-reckoned position from the last fix, track, and groundspeed
-  rather than holding the last NMEA lat/lon until the next sentence arrives.
-- GPS coasting mainly helps the lateral needle. The loop
-  extrapolates lat/lon from NMEA track and groundspeed at 10 Hz, so lateral CDI
-  is recomputed smoothly between slower GPS position fixes.
+  using `SensorFusion::fusedPosition()` rather than holding the last NMEA
+  lat/lon until the next sentence arrives.
+- `SensorFusion::fusedPosition()` extrapolates lat/lon from the latest GPS
+  position, track, and groundspeed at 10 Hz, so lateral CDI is recomputed
+  smoothly between slower GPS position fixes.
 - The vertical needle should use `fusedGpsAltitudeMeters()` rather than reading
   `navFix.altMeters` directly, so the 100 ms loop can reflect smooth pressure
   altitude changes without losing the GPS absolute reference.

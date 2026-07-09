@@ -1,11 +1,27 @@
 #pragma once
 
+#include <math.h>
 #include <stdint.h>
 #include "dataTools.h"
 
 class SensorFusion {
 public:
 	static const int GPS_ALT_SAMPLES = 5;
+	static constexpr double EARTH_MEAN_RADIUS_METERS = 6371000.0;
+
+	struct Position {
+		double lat = 0;
+		double lon = 0;
+	};
+
+	void updateGpsPosition(double lat, double lon, float track, float hvelKnots, uint32_t gpsTimestamp) {
+		gpsLat = lat;
+		gpsLon = lon;
+		gpsTrack = track;
+		gpsHvelKnots = hvelKnots;
+		lastGpsPositionTimestamp = gpsTimestamp;
+		hasGpsPosition = true;
+	}
 
 	void updateGpsAltitude(float altMeters, uint32_t gpsTimestamp, float pressureAltFeet, bool hasPressureAlt) {
 		if (gpsTimestamp == lastGpsAltTimestamp)
@@ -40,7 +56,34 @@ public:
 		return anchorGpsAltMeters + pressureDeltaMeters;
 	}
 
+	Position fusedPosition(uint32_t nowMs) const {
+		if (!hasGpsPosition)
+			return Position();
+
+		uint32_t fixAgeMs = nowMs - lastGpsPositionTimestamp;
+		double distanceMeters = gpsHvelKnots * 0.514444 * fixAgeMs / 1000.0;
+		return locationBearingDistance(gpsLat, gpsLon, gpsTrack, distanceMeters);
+	}
+
 private:
+	Position locationBearingDistance(double lat, double lon, double brng, double distanceMeters) const {
+		double lat1 = lat * M_PI / 180;
+		double lon1 = lon * M_PI / 180;
+		double brngRad = brng * M_PI / 180;
+		double angularDistance = distanceMeters / EARTH_MEAN_RADIUS_METERS;
+
+		double lat2 = asin(sin(lat1) * cos(angularDistance) +
+			cos(lat1) * sin(angularDistance) * cos(brngRad));
+		double lon2 = lon1 + atan2(
+			sin(brngRad) * sin(angularDistance) * cos(lat1),
+			cos(angularDistance) - sin(lat1) * sin(lat2));
+
+		Position pos;
+		pos.lat = lat2 * 180 / M_PI;
+		pos.lon = lon2 * 180 / M_PI;
+		return pos;
+	}
+
 	float fitGpsAltitudeAt(uint32_t gpsTimestamp) const {
 		if (gpsAltSampleCount == 1)
 			return gpsAltSamples[0];
@@ -78,4 +121,11 @@ private:
 	float anchorPressureAltFeet = 0;
 	bool hasAltitudeAnchor = false;
 	bool hasPressureAnchor = false;
+
+	double gpsLat = 0;
+	double gpsLon = 0;
+	float gpsTrack = 0;
+	float gpsHvelKnots = 0;
+	uint32_t lastGpsPositionTimestamp = 0;
+	bool hasGpsPosition = false;
 };

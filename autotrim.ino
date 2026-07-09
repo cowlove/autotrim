@@ -651,18 +651,20 @@ void updateFixFromNmea() {
 		navFix.hasSpeed = false;
 	}
 	navFix.timestamp = millis() - nmeaGps.location.age();
+	if (navFix.hasTrack && navFix.hasSpeed) {
+		sensorFusion.updateGpsPosition(
+			navFix.lat,
+			navFix.lon,
+			navFix.track,
+			navFix.hvelKnots,
+			navFix.timestamp);
+	}
 	navFix.updated = true;
 	navFix.valid = true;
 }
 
 bool hasFreshGpsFix() {
 	return navFix.valid && (uint32_t)(millis() - navFix.timestamp) <= GPS_FIX_STALE_MS;
-}
-
-LatLon coastedGpsPosition() {
-	uint32_t fixAgeMs = millis() - navFix.timestamp;
-	double distanceMeters = navFix.hvelKnots * 0.514444 * fixAgeMs / 1000.0;
-	return locationBearingDistance(LatLon(navFix.lat, navFix.lon), navFix.track, distanceMeters);
 }
 
 float fusedGpsAltitudeMeters() {
@@ -933,7 +935,8 @@ void loop() {
 			//Serial.print(s.c_str());
 		}
 		if (isrData.mode == 5 && hasFreshGpsFix() && navFix.hasTrack && navFix.hasSpeed && navFix.hasAltitude) {
-			LatLon now = coastedGpsPosition();
+			SensorFusion::Position fusedPos = sensorFusion.fusedPosition(millis());
+			LatLon now(fusedPos.lat, fusedPos.lon);
 			float altMeters = fusedGpsAltitudeMeters();
 			if (ils == NULL) {
 				float vlocTrk = g5KnobValues[4] * 180/M_PI;
@@ -1051,6 +1054,12 @@ class ESP32sim_autotrim : Csim_Module {
 		isrData.hasPalt = true;
 		isrData.magTrack = DEG2RAD(trueToMag(navFix.track));
 		isrData.timestamp = millis();
+		sensorFusion.updateGpsPosition(
+			navFix.lat,
+			navFix.lon,
+			navFix.track,
+			navFix.hvelKnots,
+			navFix.timestamp);
 		sensorFusion.updateGpsAltitude(navFix.altMeters, navFix.timestamp, isrData.palt, isrData.hasPalt);
 	}
 
