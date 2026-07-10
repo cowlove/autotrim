@@ -177,7 +177,7 @@ struct DummyLoopTime {
 } loopTimeAvg;
 uint64_t lastLoopTime = -1;
 EggTimer serialReportTimer(500), displayTimer(1000);
-EggTimer canReportTimer(100), canResetTimer(5000), sl30Heartbeat(1000), sdCardFlush(2000), ilsWaitReportTimer(2000);
+EggTimer canReportTimer(200), canResetTimer(5000), sl30Heartbeat(1000), sdCardFlush(2000), ilsWaitReportTimer(2000);
 static const int CAN_DRAIN_BEFORE_ESPNOW_PKTS = 200;
 static const uint32_t ESPNOW_PENDING_CAN_REPORT_MAX_MS = 250;
 
@@ -202,13 +202,19 @@ void superSend(const char *b) {
 struct IsrData {
 	float pitch, roll, knobVal = 0, magHdg, magTrack, ias, tas, palt, slip;
 	int knobSel, mode;
-	bool forceSend, hasPalt;
+	bool hasPalt;
 	uint32_t timestamp;
 	uint8_t *bufIn, *bufOut; 
 	int exceptions;
 	int udpSent;
 	int udpErrs;
 } isrData, lastSent;
+
+bool shouldForceEspNowSend() {
+	// Placeholder for future threshold-based early send logic.
+	// Keep the comparison state in lastSent so the checks can stay centralized here.
+	return false;
+}
 
 void resetIlsSimulator() {
 	if (ils != NULL) {
@@ -531,8 +537,8 @@ void canParse(int id, int len, uint32_t timestamp, const uint8_t *ibuf) {
 			isrData.pitch = isrData.roll = 0; 
 			isrData.exceptions++;
 		}
-		//sendCanData(false);
-	}
+	//sendCanData(false);
+}
 #if 0 
 	if (lastId == 0x18882100 && ibuf[0] == 0xdc && ibuf[1] == 0x02 && mpSize >= 16) {
 		float thresh = .01;
@@ -596,7 +602,6 @@ void canParse(int id, int len, uint32_t timestamp, const uint8_t *ibuf) {
 			isrData.exceptions++; 
 		}
 		Serial.printf("Knob %d val %f\n", (int)isrData.knobSel, isrData.knobVal);
-		isrData.forceSend = true;
 		//sendCanData(true);
 	}
 
@@ -838,8 +843,10 @@ void loop() {
 
 	canPacketsThisLoop += can->run(0, CAN_DRAIN_BEFORE_ESPNOW_PKTS);
 	bool canIdleForTelemetry = canPacketsThisLoop == 0;
+	bool espnowBusy = espnow.writeBusy();
+	bool forceEspNowSend = shouldForceEspNowSend();
 
-	if (canReportTimer.tick()/* || isrData.forceSend*/) {
+	if (canReportTimer.tick() || forceEspNowSend) {
 		espnowCanReportPending = true;
 		if (espnowCanReportPendingSince == 0)
 			espnowCanReportPendingSince = millis();
@@ -848,12 +855,11 @@ void loop() {
 	}
 	bool espnowCanReportOverdue = espnowCanReportPending &&
 		(uint32_t)(millis() - espnowCanReportPendingSince) >= ESPNOW_PENDING_CAN_REPORT_MAX_MS;
-	if (espnowCanReportPending && (canIdleForTelemetry || espnowCanReportOverdue)) {
+	if (espnowCanReportPending && !espnowBusy && (canIdleForTelemetry || espnowCanReportOverdue)) {
 		if (!canIdleForTelemetry)
 			espnowCanReportsSentOverBusyCan++;
 		espnowCanReportPending = false;
 		espnowCanReportPendingSince = 0;
-		isrData.forceSend = false;
 		//Serial.printf("%08d %d\n", (int)millis(), isrData.mode);
 		sendCanData();
 	}
