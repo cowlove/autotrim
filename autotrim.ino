@@ -51,6 +51,13 @@ static SensorFusion sensorFusion;
 static float g5KnobValues[6];
 static double hd = -2, vd = -2; // cdi deflections 
 
+static double angularDiffRad(double a, double b) {
+	double d = fmod(a - b, 2.0 * M_PI);
+	if (d > M_PI) d -= 2.0 * M_PI;
+	if (d < -M_PI) d += 2.0 * M_PI;
+	return d;
+}
+
 #ifdef XDISPLAY
 namespace Display {
 	JDisplay jd;
@@ -619,11 +626,11 @@ void canParse(int id, int len, uint32_t timestamp, const uint8_t *ibuf) {
 
 	static float lastKnobVal = 0;
 	static uint64_t lastKnobMillis = 0;
-	if ((isrData.knobSel == 1/*hdg*/ || isrData.knobSel == 5)  && isrData.knobVal != lastKnobVal) { 
-		if (millis() - lastKnobMillis > 2500) 
+	if ((isrData.knobSel == 1/*hdg*/ || isrData.knobSel == 5)  && isrData.knobVal != lastKnobVal) {
+		if (millis() - lastKnobMillis > 2500)
 			setMode(0);
 		lastKnobMillis = millis();
-		double delta = isrData.knobVal - lastKnobVal;
+		double delta = angularDiffRad(isrData.knobVal, lastKnobVal);
 		bool oneDegree = abs(delta) < 1.5/180*M_PI && abs(delta) > 0.5/180*M_PI;
 		bool evenMode = (isrData.mode & 0x1) == 0;
 		if (false && isrData.knobSel == 0) { // for debugging, use altimeter adjustment for knob input too 

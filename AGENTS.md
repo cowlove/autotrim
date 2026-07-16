@@ -46,6 +46,19 @@ design intent, caveats, and workflows that future agents need.
     (`Chose 'KBFI 14R'`) or synthetic ILS creation (`Started ILS`).
 - The csim build has a known benign `ARDUINO` redefinition warning from the
   `esp32csim` include path.
+- `autotrim` depends on the sibling `../winglevlr` repo for `WaypointNav.h`
+  and the ILS/VOR simulator helpers.
+- The csim path also depends on the host `lv_port_linux` checkout used by
+  `winglevlr`; if that tree is not built, `autotrim BOARD=csim` can fail at the
+  link step even when the firmware sources compile cleanly.
+- The current working csim fix path is:
+  - install/use the same `TinyGPSPlus` git checkout on both machines instead
+    of `arduino-cli lib install TinyGPSPlus@...`
+  - build `lv_port_linux` with CMake, not the old top-level `make`:
+    - `cd ~/src/lv_port_linux`
+    - `cmake -B build`
+    - `make -C build -j2`
+  - then rebuild `autotrim`/`winglevlr` csim targets
 - Before committing code changes, prefer at least:
   - `git diff --check`
   - `./test.sh`
