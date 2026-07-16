@@ -152,7 +152,7 @@ void ulp_go() {
 // 0-3: HDG mode
 // 4: NAV mode
 // 5: ILS simulation
-// 6: CDI needle test movement
+// 6: placeholder VOR simulation
 
 SL30 sl30;
 
@@ -191,6 +191,8 @@ static int espnowReportsSkippedForCan = 0;
 static bool espnowCanReportPending = false;
 static uint32_t espnowCanReportPendingSince = 0;
 static int espnowCanReportsSentOverBusyCan = 0;
+static VorSimulator *vor = NULL;
+static const float SYNTHETIC_VOR_DISTANCE_METERS = 1852.0;
 
 // send udp packet multiple times on broadcast address and all addresses in normal EchoUAT wifi range 
 void superSend(const char *b) { 
@@ -223,15 +225,25 @@ void resetIlsSimulator() {
 	}
 }
 
+void resetVorSimulator() {
+	if (vor != NULL) {
+		delete vor;
+		vor = NULL;
+	}
+}
+
 void setMode(int newMode) {
 	if (isrData.mode == newMode)
 		return;
 
 	bool touchesIlsMode = isrData.mode == 5 || newMode == 5;
+	bool touchesVorMode = isrData.mode == 6 || newMode == 6;
 	isrData.mode = newMode;
-	// Entering mode 5 starts fresh; leaving mode 5 tears down the active simulation.
+	// Entering a nav simulation starts fresh; leaving it tears down the active simulation.
 	if (touchesIlsMode)
 		resetIlsSimulator();
+	if (touchesVorMode)
+		resetVorSimulator();
 }
 
 float knobValues[10];
@@ -687,6 +699,16 @@ float fusedGpsAltitudeMeters() {
 		: navFix.altMeters;
 }
 
+SensorFusion::Position currentNavPosition() {
+	if (navFix.hasSpeed)
+		return sensorFusion.fusedPosition(millis());
+
+	SensorFusion::Position pos;
+	pos.lat = navFix.lat;
+	pos.lon = navFix.lon;
+	return pos;
+}
+
 void expireStaleGpsFix() {
 	if (navFix.valid && !hasFreshGpsFix()) {
 		navFix.valid = false;
@@ -955,7 +977,7 @@ void loop() {
 
 	if (g5Timer.tick()) { 
 		expireStaleGpsFix();
-		if (debugMoveNeedles || isrData.mode == 6 || startupPeriod > 0) { 
+		if (debugMoveNeedles || startupPeriod > 0) {
 			hd += .05;
 			vd += .075;
 			if (hd > 2) hd = -2;
@@ -1016,6 +1038,31 @@ void loop() {
 				Serial.println("ILS mode waiting for GPS altitude");
 		} else if (ils != NULL) {
 			resetIlsSimulator();
+		}
+		if (isrData.mode == 6 && hasFreshGpsFix() && navFix.hasTrack) {
+			SensorFusion::Position fusedPos = currentNavPosition();
+			LatLon now(fusedPos.lat, fusedPos.lon);
+			if (vor == NULL) {
+				LatLon station = locationBearingDistance(now, navFix.track, SYNTHETIC_VOR_DISTANCE_METERS);
+				vor = new VorSimulator(station);
+				Serial.print("Started VOR, ");
+				Serial.println(vor->toString().c_str());
+			}
+			if (vor != NULL) {
+				float obsCourse = g5KnobValues[4] * 180/M_PI;
+				vor->setCurrentLocation(now);
+				hd = vor->inConeOfConfusion() ? 2.0 : vor->cdiPercent(magToTrue(obsCourse)) * 2.0;
+				vd = 0;
+				std::string s = sl30.setCDI(hd, vd);
+				Serial2.print(s.c_str());
+			}
+		} else if (isrData.mode == 6 && (!navFix.valid || !navFix.hasTrack) && ilsWaitReportTimer.tick()) {
+			if (!navFix.valid)
+				Serial.println("VOR mode waiting for GPS fix");
+			else
+				Serial.println("VOR mode waiting for GPS track");
+		} else if (vor != NULL) {
+			resetVorSimulator();
 		}
 	}
 	delay(1);

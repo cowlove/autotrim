@@ -1,0 +1,20 @@
+{
+  "name": "synthetic_vor_obs345",
+  "description": "Synthetic VOR one nautical mile ahead with OBS set to the inbound course.",
+  "seconds": 20,
+  "track": [
+    "SPEED 100",
+    "AP 0",
+    "47.00000000000000, -122.00000000000000 1000",
+    "INPUT.VLOCBUG 344.5",
+    "INPUT.MODE 6",
+    "47.10000000000000, -122.00000000000000 1000"
+  ],
+  "expect_output": [
+    "Started VOR"
+  ],
+  "expect_final_tsim": {
+    "mode": 6,
+    "hd": [-0.2, 0.2]
+  }
+}

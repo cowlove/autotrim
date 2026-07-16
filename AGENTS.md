@@ -15,6 +15,9 @@ design intent, caveats, and workflows that future agents need.
   differences; document those boundaries when they are discovered or clarified.
 - Do not use this file for private/user-specific memory. It should contain
   durable project facts and engineering guidance that belongs with the repo.
+- Use `SESSION_STATE.md` as the lightweight handoff file for the current live
+  project state when a reset or session switch is likely. Keep the handoff
+  concise and factual so the next session can resume without rereading chat.
 
 ## Project Shape
 
@@ -57,7 +60,7 @@ design intent, caveats, and workflows that future agents need.
   - `0-3`: HDG modes
   - `4`: NAV mode
   - `5`: ILS simulation
-  - `6`: CDI needle test movement
+  - `6`: placeholder VOR simulation
 - CAN debug/dump behavior should not be assigned special user-facing mode
   values. Use explicit commands such as `canserial` and `canudp`.
 
@@ -163,6 +166,36 @@ Mode 5 chooses its ILS source when the simulator is created:
 To switch between these paths, leave mode 5 and re-enter mode 5 after changing
 the VLOC/OBS course. This is intentional because entering mode 5 creates a fresh
 simulation based on current GPS/knob state.
+
+## VOR Simulation
+
+- Mode 6 is currently the placeholder VOR simulation mode.
+- Entering mode 6 resets any existing VOR simulator instance. The runtime then
+  creates a new synthetic VOR when the 100 ms G5/SL30 loop sees a fresh GPS fix
+  with a valid track.
+- The synthetic station is placed one nautical mile ahead of the aircraft's
+  current course at creation time.
+- The station position is fixed after creation. Leave and re-enter mode 6 to
+  create a new station from a new aircraft position/course.
+- Lateral CDI is based on the aircraft's radial from the synthetic station
+  and bearing to the synthetic station compared with the current VLOC/OBS
+  course. The VLOC/OBS course is treated as magnetic and converted to true with
+  `magToTrue()`, matching the ILS path.
+- Because the current SL30 wrapper does not expose TO/FROM flags, the VOR model
+  uses the smaller of the inbound-to-station and outbound-radial angular errors.
+  That keeps the CDI centered when either the OBS course to the station or its
+  reciprocal outbound radial is selected.
+- VOR CDI full-scale deflection is currently modeled as 10 degrees.
+- VOR cone of confusion is intentionally modeled as a fixed distance, not an
+  angular or altitude-dependent volume. The current threshold is 0.2 nautical
+  miles from the synthetic station.
+- Until the SL30 wrapper exposes a proper CDI-valid/invalid flag, mode 6 pegs
+  the lateral needle while inside the cone of confusion instead of trying to
+  compute a stable course deflection.
+- VOR output currently centers the vertical needle (`vd = 0`) because the SL30
+  wrapper does not yet expose separate no-glideslope/no-vertical flags.
+- The old automatic mode-6 CDI needle sweep was replaced by the VOR placeholder.
+  The explicit `cdi` command can still set `debugMoveNeedles` for test motion.
 
 ## csim Track Simulation
 

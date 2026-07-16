@@ -45,7 +45,7 @@ toggle count.
 - `0-3`: HDG modes
 - `4`: NAV mode
 - `5`: ILS simulation
-- `6`: CDI needle test movement
+- `6`: placeholder VOR simulation
 
 CAN debug output is controlled by explicit commands such as `canserial` and
 `canudp`, not by special user-facing mode values.
@@ -77,3 +77,13 @@ creates the simulator:
 
 To switch between these paths, leave mode 5 and re-enter it after changing the
 VLOC/OBS course.
+
+## VOR Simulation
+
+Mode 6 is a placeholder synthetic VOR simulation. When entered with a fresh GPS
+fix and track, it creates a fake VOR station one nautical mile ahead of the
+aircraft's current course. The lateral CDI is then driven from the aircraft's
+position relative to that synthetic station and the selected VLOC/OBS course.
+Inside 0.2 nautical miles of the synthetic station, the sim treats the VOR as
+inside the cone of confusion and pegs the lateral needle until the SL30 protocol
+wrapper grows a proper invalid-CDI flag.
