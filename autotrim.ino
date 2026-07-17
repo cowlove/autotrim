@@ -898,12 +898,13 @@ void loop() {
 		char buf[256]; 
 		snprintf(buf, sizeof(buf), "L: %08.3f %05.3f/%05.3f/%05.3f "
 		"m:%d appkt:%d skip:%d forced:%d can:%d drop:%d qlen:%d serIn:%d "
-		"%d\n", 
+		"cdi:%.2f/%.2f bytes:%u/%u flags:0x%02X\n",
 		millis() / 1000.0, 
 		loopTimeAvg.average()/1000.0, loopTimeAvg.min()/1000.0, loopTimeAvg.max()/1000.0, 
 		isrData.mode, espnowPackets, espnowReportsSkippedForCan, espnowCanReportsSentOverBusyCan,
 		can->isrCount, can->dropped, can->getQueueLen(), serialBytesIn,
-		0);
+		sl30.lastCdiHd, sl30.lastCdiVd,
+		sl30.lastCdiHdByte, sl30.lastCdiVdByte, sl30.lastCdiFlags);
 		Serial.print(buf);
 
 #if 0 
