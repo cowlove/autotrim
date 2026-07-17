@@ -1013,7 +1013,16 @@ void loop() {
 				// an unset VLOC course so the built-in approach path is selected.
 				if (vlocTrk > 0.01f) {
 					const float gs = 3.0;
-					float tdze = altBug - 200 / 3.281;
+					const float THREE_THOUSAND_FEET_METERS = 3000 / FEET_PER_METER;
+					const float ONE_THOUSAND_FEET_METERS = 1000 / FEET_PER_METER;
+					bool altBugValid = altBug <= altMeters &&
+						altMeters - altBug <= THREE_THOUSAND_FEET_METERS;
+					float tdze = altBugValid
+						? altBug - 200 / FEET_PER_METER
+						: altMeters - ONE_THOUSAND_FEET_METERS;
+					if (!altBugValid)
+						Serial.printf("Synthetic ILS ignoring invalid ALTBUG %.1f at aircraft altitude %.1f, using TDZE %.1f\n",
+							altBug, altMeters, tdze);
 					// Put the final approach intercept 3 km ahead, then project to the touchdown point
 					// using the selected course and a 3 degree glideslope from the current altitude.
 					LatLon facIntercept = locationBearingDistance(now, navFix.track, 3000);

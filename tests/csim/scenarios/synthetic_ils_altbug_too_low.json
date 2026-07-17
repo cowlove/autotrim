@@ -1,0 +1,19 @@
+{
+  "name": "synthetic_ils_altbug_too_low",
+  "description": "Synthetic ILS falls back when ALTBUG is more than 3000 feet below the aircraft.",
+  "seconds": 20,
+  "track": [
+    "SPEED 100",
+    "AP 1",
+    "INPUT.ALTBUG -1000",
+    "INPUT.VLOCBUG 140",
+    "47.70813066084988, -122.36369934517762 1000",
+    "47.6998032598224, -122.36380732512066 1000",
+    "INPUT.MODE 5",
+    "47.54158263617579, -122.36577368233236 1000"
+  ],
+  "expect_output": [
+    "Synthetic ILS ignoring invalid ALTBUG",
+    "Started ILS"
+  ]
+}
