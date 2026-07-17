@@ -1001,13 +1001,17 @@ void loop() {
 			LatLon now(fusedPos.lat, fusedPos.lon);
 			float altMeters = fusedGpsAltitudeMeters();
 			if (ils == NULL) {
-				float vlocTrk = g5KnobValues[4] * 180/M_PI;
+				float vlocTrk = fmodf(g5KnobValues[4] * 180/M_PI, 360.0f);
+				if (vlocTrk < 0)
+					vlocTrk += 360.0f;
 				float altBug = g5KnobValues[2];
 				// Historical mode-5 behavior has two ILS entry paths:
 				// - VLOC/OBS course set: synthesize a fictional ILS ahead of the current GPS track.
 				// - VLOC/OBS course zero: choose the nearest compatible approach from the built-in list.
 				// The choice happens only when ils is created; leave and re-enter mode 5 to switch paths.
-				if (vlocTrk != 0) {
+				// The G5 can represent north as 0 or 360 degrees. Treat both as
+				// an unset VLOC course so the built-in approach path is selected.
+				if (vlocTrk > 0.01f) {
 					const float gs = 3.0;
 					float tdze = altBug - 200 / 3.281;
 					// Put the final approach intercept 3 km ahead, then project to the touchdown point
