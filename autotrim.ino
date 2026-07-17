@@ -1076,6 +1076,8 @@ void loop() {
 				bool inCone = vor->inConeOfConfusion();
 				hd = inCone ? 2.0 : vor->cdiPercent(obsCourseTrue) * 2.0;
 				vd = 0;
+				std::string radial = sl30.setVORRadial(vor->radialTrue());
+				Serial2.print(radial.c_str());
 				std::string s = sl30.setCDI(hd, vd,
 					!inCone && vor->isTo(obsCourseTrue),
 					!inCone && vor->isFrom(obsCourseTrue));
