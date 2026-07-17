@@ -194,10 +194,11 @@ simulation based on current GPS/knob state.
   and bearing to the synthetic station compared with the current VLOC/OBS
   course. The VLOC/OBS course is treated as magnetic and converted to true with
   `magToTrue()`, matching the ILS path.
-- The SL30 wrapper's VOR overload emits NAV-valid/superflag bits and sets the
-  TO or FROM flag according to whether the selected OBS course points toward
-  or away from the station. The VOR model uses the smaller of the
-  inbound-to-station and outbound-radial angular errors for CDI selection.
+- The SL30 wrapper's VOR overload emits NAV-valid/superflag bits, asserts the
+  localizer-detect bit for lateral CDI compatibility, and sets the TO or FROM
+  flag according to whether the selected OBS course points toward or away from
+  the station. The VOR model uses the smaller of the inbound-to-station and
+  outbound-radial angular errors for CDI selection.
 - VOR CDI full-scale deflection is currently modeled as 10 degrees.
 - VOR cone of confusion is intentionally modeled as a fixed distance, not an
   angular or altitude-dependent volume. The current threshold is 0.2 nautical
