@@ -194,17 +194,16 @@ simulation based on current GPS/knob state.
   and bearing to the synthetic station compared with the current VLOC/OBS
   course. The VLOC/OBS course is treated as magnetic and converted to true with
   `magToTrue()`, matching the ILS path.
-- Because the current SL30 wrapper does not expose TO/FROM flags, the VOR model
-  uses the smaller of the inbound-to-station and outbound-radial angular errors.
-  That keeps the CDI centered when either the OBS course to the station or its
-  reciprocal outbound radial is selected.
+- The SL30 wrapper's VOR overload emits NAV-valid/superflag bits and sets the
+  TO or FROM flag according to whether the selected OBS course points toward
+  or away from the station. The VOR model uses the smaller of the
+  inbound-to-station and outbound-radial angular errors for CDI selection.
 - VOR CDI full-scale deflection is currently modeled as 10 degrees.
 - VOR cone of confusion is intentionally modeled as a fixed distance, not an
   angular or altitude-dependent volume. The current threshold is 0.2 nautical
   miles from the synthetic station.
-- Until the SL30 wrapper exposes a proper CDI-valid/invalid flag, mode 6 pegs
-  the lateral needle while inside the cone of confusion instead of trying to
-  compute a stable course deflection.
+- Inside the cone of confusion, mode 6 pegs the lateral needle and clears both
+  TO and FROM flags, matching the SL30 protocol's ambiguous-direction state.
 - VOR output currently centers the vertical needle (`vd = 0`) because the SL30
   wrapper does not yet expose separate no-glideslope/no-vertical flags.
 - The old automatic mode-6 CDI needle sweep was replaced by the VOR placeholder.

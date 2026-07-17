@@ -1058,9 +1058,13 @@ void loop() {
 			if (vor != NULL) {
 				float obsCourse = g5KnobValues[4] * 180/M_PI;
 				vor->setCurrentLocation(now);
-				hd = vor->inConeOfConfusion() ? 2.0 : vor->cdiPercent(magToTrue(obsCourse)) * 2.0;
+				float obsCourseTrue = magToTrue(obsCourse);
+				bool inCone = vor->inConeOfConfusion();
+				hd = inCone ? 2.0 : vor->cdiPercent(obsCourseTrue) * 2.0;
 				vd = 0;
-				std::string s = sl30.setCDI(hd, vd);
+				std::string s = sl30.setCDI(hd, vd,
+					!inCone && vor->isTo(obsCourseTrue),
+					!inCone && vor->isFrom(obsCourseTrue));
 				Serial2.print(s.c_str());
 			}
 		} else if (isrData.mode == 6 && (!navFix.valid || !navFix.hasTrack) && ilsWaitReportTimer.tick()) {

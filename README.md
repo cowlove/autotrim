@@ -84,6 +84,6 @@ Mode 6 is a placeholder synthetic VOR simulation. When entered with a fresh GPS
 fix and track, it creates a fake VOR station one nautical mile ahead of the
 aircraft's current course. The lateral CDI is then driven from the aircraft's
 position relative to that synthetic station and the selected VLOC/OBS course.
-Inside 0.2 nautical miles of the synthetic station, the sim treats the VOR as
-inside the cone of confusion and pegs the lateral needle until the SL30 protocol
-wrapper grows a proper invalid-CDI flag.
+The SL30 output includes the corresponding TO or FROM flag. Inside 0.2
+nautical miles of the synthetic station, the sim treats the VOR as inside the
+cone of confusion, clears both direction flags, and pegs the lateral needle.
